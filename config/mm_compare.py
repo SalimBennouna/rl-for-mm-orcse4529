@@ -27,6 +27,8 @@ from agent.HeuristicBeliefLearningAgent import HeuristicBeliefLearningAgent
 from agent.market_makers.AdaptiveMarketMakerAgent import AdaptiveMarketMakerAgent
 from agent.market_makers.MarketMakerAgent import MarketMakerAgent
 from agent.market_makers.SpreadBasedMarketMakerAgent import SpreadBasedMarketMakerAgent
+from agent.market_makers.RLMarketMakerAgent import RLMarketMakerAgent
+from agent.market_makers.RLTabularMarketMakerAgent import RLTabularMarketMakerAgent
 from agent.examples.MomentumAgent import MomentumAgent
 from model.LatencyModel import LatencyModel
 
@@ -76,9 +78,9 @@ parser.add_argument('--config_help',
 # Execution agent config
 # market maker config
 parser.add_argument('--mm-type',
-                    choices=['market', 'adaptive', 'spread'],
-                    default='market',
-                    help='Which market maker class to use.')
+                    choices=['none', 'simple', 'adaptive', 'spread', 'rl_baseline', 'rl_tabular'],
+                    default='none',
+                    help='Which market maker class to use (or none).')
 parser.add_argument('--mm-pov',
                     type=float,
                     default=0.025
@@ -118,6 +120,10 @@ parser.add_argument('--mm-spread-alpha',
 parser.add_argument('--mm-backstop-quantity',
                     type=float,
                     default=50000)
+parser.add_argument('--mm-size',
+                    type=int,
+                    default=60,
+                    help='Fixed size for market maker orders')
 
 parser.add_argument('--fund-vol',
                     type=float,
@@ -160,7 +166,7 @@ symbol = args.ticker
 starting_cash = 10000000  # Cash in this simulator is always in CENTS.
 
 r_bar = 1e5
-sigma_n = r_bar / 10
+sigma_n = r_bar / 1000  # further lower observation noise for value agents
 kappa = 1.67e-15
 lambda_a = 7e-11
 
@@ -199,7 +205,7 @@ agent_types.extend("ExchangeAgent")
 agent_count += 1
 
 # 2) Noise Agents
-num_noise = 5000
+num_noise = 0
 noise_mkt_open = historical_date + pd.to_timedelta("09:00:00")  # These times needed for distribution of arrival times
                                                                 # of Noise Agents
 noise_mkt_close = historical_date + pd.to_timedelta("16:00:00")
@@ -216,7 +222,7 @@ agent_count += num_noise
 agent_types.extend(['NoiseAgent'])
 
 # 3) Value Agents
-num_value = 100
+num_value = 5
 agents.extend([ValueAgent(id=j,
                           name="Value Agent {}".format(j),
                           type="ValueAgent",
@@ -253,37 +259,39 @@ if args.mm_type == 'spread':
 # Single market maker tuple (window_size, pov, num_ticks, wake_up_freq, min_order_size)
 mm_params = [(mm_window_size, args.mm_pov, args.mm_num_ticks, args.mm_wake_up_freq, args.mm_min_order_size)]
 
-num_mm_agents = 1
+num_mm_agents = 0 if args.mm_type == 'none' else 1
 mm_cancel_limit_delay = 50  # 50 nanoseconds
 
 def build_market_maker(idx, agent_id):
     rstate = np.random.RandomState(seed=np.random.randint(low=0, high=2 ** 32, dtype='uint64'))
     window_size, pov, num_ticks, wake_up_freq, min_order_size = mm_params[idx]
 
-    if args.mm_type == 'market':
+    if args.mm_type == 'simple':
+        mm_wake = '3s'
         return MarketMakerAgent(id=agent_id,
                                 name="MARKET_MAKER_AGENT_{}".format(idx),
                                 type='MarketMakerAgent',
                                 symbol=symbol,
                                 starting_cash=starting_cash,
-                                min_size=args.mm_min_order_size,
-                                max_size=args.mm_max_order_size,
-                                wake_up_freq=wake_up_freq,
+                                min_size=args.mm_size,
+                                max_size=args.mm_size,
+                                wake_up_freq=mm_wake,
                                 subscribe=False,
                                 log_orders=log_orders,
                                 random_state=rstate)
 
     if args.mm_type == 'adaptive':
+        mm_wake = '3s'
         return AdaptiveMarketMakerAgent(id=agent_id,
                                         name="ADAPTIVE_POV_MARKET_MAKER_AGENT_{}".format(idx),
                                         type='AdaptivePOVMarketMakerAgent',
                                         symbol=symbol,
                                         starting_cash=starting_cash,
-                                        pov=pov,
-                                        min_order_size=min_order_size,
+                                        pov=0,  # fixed size via min_order_size
+                                        min_order_size=args.mm_size,
                                         window_size=window_size,
-                                        num_ticks=num_ticks,
-                                        wake_up_freq=wake_up_freq,
+                                        num_ticks=1,
+                                        wake_up_freq=mm_wake,
                                         cancel_limit_delay=mm_cancel_limit_delay,
                                         skew_beta=args.mm_skew_beta,
                                         level_spacing=args.mm_level_spacing,
@@ -292,21 +300,65 @@ def build_market_maker(idx, agent_id):
                                         log_orders=log_orders,
                                         random_state=rstate)
 
-    # args.mm_type == 'spread'
-    if isinstance(window_size, str):
-        raise ValueError("--mm-window-size must be numeric when using spread-based market makers.")
-    return SpreadBasedMarketMakerAgent(id=agent_id,
-                                       name="SPREAD_MARKET_MAKER_AGENT_{}".format(idx),
-                                       type='SpreadBasedMarketMakerAgent',
-                                       symbol=symbol,
-                                       starting_cash=starting_cash,
-                                       order_size=min_order_size,
-                                       window_size=window_size,
-                                       num_ticks=num_ticks,
-                                       wake_up_freq=wake_up_freq,
-                                       subscribe=False,
-                                       log_orders=log_orders,
-                                       random_state=rstate)
+    if args.mm_type == 'spread':
+        if isinstance(window_size, str):
+            raise ValueError("--mm-window-size must be numeric when using spread-based market makers.")
+        return SpreadBasedMarketMakerAgent(id=agent_id,
+                                           name="SPREAD_MARKET_MAKER_AGENT_{}".format(idx),
+                                           type='SpreadBasedMarketMakerAgent',
+                                           symbol=symbol,
+                                           starting_cash=starting_cash,
+                                           order_size=min_order_size,
+                                           window_size=window_size,
+                                           num_ticks=num_ticks,
+                                           wake_up_freq=wake_up_freq,
+                                           subscribe=False,
+                                           log_orders=log_orders,
+                                           random_state=rstate)
+
+    if args.mm_type == 'rl_baseline':
+        return RLMarketMakerAgent(id=agent_id,
+                                  name="RL_MARKET_MAKER_AGENT_{}".format(idx),
+                                  type='RLMarketMakerAgent',
+                                  symbol=symbol,
+                                  starting_cash=starting_cash,
+                                  wake_up_freq=args.mm_wake_up_freq,
+                                  base_size=args.mm_size,
+                                  offsets=[1, 2, 3],
+                                  epsilon=0.1,
+                                  alpha=0.1,
+                                  gamma=0.95,
+                                  inventory_clip=1000,
+                                  spread_clip=50,
+                                  inventory_bin=100,
+                                  spread_bin=1,
+                                  inventory_penalty=0.0,
+                                  log_orders=log_orders,
+                                  random_state=rstate)
+
+    if args.mm_type == 'rl_tabular':
+        mm_wake = '3s'
+        return RLTabularMarketMakerAgent(id=agent_id,
+                                         name="RL_TABULAR_MARKET_MAKER_AGENT_{}".format(idx),
+                                         type='RLTabularMarketMakerAgent',
+                                         symbol=symbol,
+                                         starting_cash=starting_cash,
+                                         wake_up_freq=mm_wake,
+                                         base_size=args.mm_size,
+                                         base_offsets=[1, 2, 3],
+                                         skew_levels=[-1, 0, 1],
+                                         epsilon=0.1,
+                                         alpha=0.1,
+                                         gamma=0.95,
+                                         inventory_clip=1000,
+                                         spread_clip=50,
+                                         inventory_bin=100,
+                                         spread_bin=1,
+                                         inventory_penalty=0.0,
+                                         log_orders=log_orders,
+                                         random_state=rstate)
+
+    raise ValueError(f"Unknown mm_type {args.mm_type}")
 
 
 agents.extend([build_market_maker(idx, j)
@@ -316,7 +368,7 @@ agent_types.extend([args.mm_type] * num_mm_agents)
 
 
 # 5) Zero Intelligence Agents
-num_zi_agents = 50
+num_zi_agents = 0
 agents.extend([ZeroIntelligenceAgent(id=j,
                                      name="ZI_AGENT_{}".format(j),
                                      type="ZeroIntelligenceAgent",
@@ -340,7 +392,7 @@ agent_count += num_zi_agents
 agent_types.extend(['ZeroIntelligenceAgent'])
 
 # 6) Heuristic Belief Learning Agents
-num_hbl_agents = 25
+num_hbl_agents = 0
 agents.extend([HeuristicBeliefLearningAgent(id=j,
                                             name="HBL_AGENT_{}".format(j),
                                             type="HeuristicBeliefLearningAgent",
@@ -365,7 +417,7 @@ agent_count += num_hbl_agents
 agent_types.extend(['HeuristicBeliefLearningAgent'])
 
 # 7) Momentum Agents
-num_momentum_agents = 25
+num_momentum_agents = 0
 
 agents.extend([MomentumAgent(id=j,
                              name="MOMENTUM_AGENT_{}".format(j),

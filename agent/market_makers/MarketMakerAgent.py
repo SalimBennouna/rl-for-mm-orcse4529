@@ -26,13 +26,13 @@ class MarketMakerAgent(TradingAgent):
     """
 
     def __init__(self, id, name, type, symbol, starting_cash, min_size, max_size , wake_up_freq='1s',
-                 subscribe=False, subscribe_freq=10e9, subscribe_num_levels=5, log_orders=False, random_state=None):
+                 subscribe=False, subscribe_freq=10e9, subscribe_num_levels=1, log_orders=False, random_state=None):
 
         super().__init__(id, name, type, starting_cash=starting_cash, log_orders=log_orders, random_state=random_state)
         self.symbol = symbol      # Symbol traded
         self.min_size = min_size  # Minimum order size
         self.max_size = max_size  # Maximum order size
-        self.size = round(self.random_state.randint(self.min_size, self.max_size) / 2) # order size per LOB side
+        self.size = self.min_size  # fixed order size per LOB side
         self.wake_up_freq = wake_up_freq  # Frequency of agent wake up
         self.subscribe = subscribe  # Flag to determine whether to subscribe to data or use polling mechanism
         self.subscribe_freq = subscribe_freq  # Frequency in nanoseconds^-1 at which to receive market updates
@@ -67,9 +67,9 @@ class MarketMakerAgent(TradingAgent):
         super().receiveMessage(currentTime, msg)
         if not self.subscribe and self.state == 'AWAITING_SPREAD' and msg.body['msg'] == 'QUERY_SPREAD':
             self.cancelOrders()
-            mid = self.last_trade[self.symbol]
+            mid = self.last_trade[self.symbol] if self.last_trade[self.symbol] is not None else None
 
-            self.num_levels = 2 * self.subscribe_num_levels   # Number of price levels to place the trades in
+            self.num_levels = 1   # Number of price levels to place the trades in
 
             bid, bid_vol, ask, ask_vol = self.getKnownBidAsk(self.symbol)
 
@@ -80,12 +80,12 @@ class MarketMakerAgent(TradingAgent):
                 log_print(f"SPREAD MISSING at time {currentTime}")
                 spread = self.last_spread
 
-            for i in range(self.num_levels):
-                self.size = round(self.random_state.randint(self.min_size, self.max_size) / 2)
-                #bids
-                self.placeLimitOrder(self.symbol, self.size, True, mid - spread - i)
-                #asks
-                self.placeLimitOrder(self.symbol, self.size, False, mid + spread + i)
+            # Single level per side at mid +/- spread
+            self.placeLimitOrder(self.symbol, self.size, True, mid - spread)
+            self.placeLimitOrder(self.symbol, self.size, False, mid + spread)
+
+            # Log state for downstream analysis
+            self._log_state(currentTime, mid, spread)
 
             self.setWakeup(currentTime + self.getWakeFrequency())
             self.state = 'AWAITING_WAKEUP'
@@ -117,8 +117,8 @@ class MarketMakerAgent(TradingAgent):
 
             for price, vol in buy_quotes.items():
                 self.placeLimitOrder(self.symbol, vol, True, price)
-            for price, vol in sell_quotes.items():
-                self.placeLimitOrder(self.symbol, vol, False, price)
+        for price, vol in sell_quotes.items():
+            self.placeLimitOrder(self.symbol, vol, False, price)
 
 
     def cancelOrders(self):
@@ -128,3 +128,14 @@ class MarketMakerAgent(TradingAgent):
 
     def getWakeFrequency(self):
         return pd.Timedelta(self.wake_up_freq)
+
+    def _log_state(self, currentTime, mid, spread):
+        # Basic state logging to enable inventory/spread plotting
+        self.logEvent('STATE', {
+            'time': currentTime,
+            'mid': mid,
+            'spread': spread,
+            'inventory': self.getHoldings(self.symbol),
+            'cash': self.holdings['CASH'],
+            'mtm': self.holdings['CASH'] + (mid if mid is not None else 0) * self.getHoldings(self.symbol),
+        })

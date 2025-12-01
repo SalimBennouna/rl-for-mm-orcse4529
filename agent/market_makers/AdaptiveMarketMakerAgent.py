@@ -139,8 +139,7 @@ class AdaptiveMarketMakerAgent(TradingAgent):
         """
 
         super().receiveMessage(currentTime, msg)
-        if self.last_mid is not None:
-            mid = self.last_mid
+        mid = self.last_mid
 
         if self.last_spread is not None and self.is_adaptive:
             self._adaptive_update_window_and_tick_size()
@@ -164,8 +163,12 @@ class AdaptiveMarketMakerAgent(TradingAgent):
                     log_print("SPREAD MISSING at time {}", currentTime)
                     self.state['AWAITING_SPREAD'] = False  # use last mid price and spread
 
-            if self.state['AWAITING_SPREAD'] is False and self.state['AWAITING_TRANSACTED_VOLUME'] is False:
+            if self.state['AWAITING_SPREAD'] is False and self.state['AWAITING_TRANSACTED_VOLUME'] is False and mid is not None:
                 self.placeOrders(mid)
+                self.state = self.initialiseState()
+                self.setWakeup(currentTime + self.getWakeFrequency())
+            elif self.state['AWAITING_SPREAD'] is False and self.state['AWAITING_TRANSACTED_VOLUME'] is False:
+                # No mid available; wait for next wakeup.
                 self.state = self.initialiseState()
                 self.setWakeup(currentTime + self.getWakeFrequency())
 
@@ -185,8 +188,11 @@ class AdaptiveMarketMakerAgent(TradingAgent):
                     log_print("SPREAD MISSING at time {}", currentTime)
                     self.state['AWAITING_MARKET_DATA'] = False
 
-            if self.state['MARKET_DATA'] is False and self.state['AWAITING_TRANSACTED_VOLUME'] is False:
+            if self.state['MARKET_DATA'] is False and self.state['AWAITING_TRANSACTED_VOLUME'] is False and mid is not None:
                 self.placeOrders(mid)
+                self.state = self.initialiseState()
+            elif self.state['MARKET_DATA'] is False and self.state['AWAITING_TRANSACTED_VOLUME'] is False:
+                # No mid available; wait for next update.
                 self.state = self.initialiseState()
 
     def _adaptive_update_spread(self, spread):
