@@ -29,7 +29,6 @@ from agent.market_makers.MarketMakerAgent import MarketMakerAgent
 from agent.market_makers.SpreadBasedMarketMakerAgent import SpreadBasedMarketMakerAgent
 from agent.market_makers.RLMarketMakerAgent import RLMarketMakerAgent
 from agent.market_makers.RLTabularMarketMakerAgent import RLTabularMarketMakerAgent
-from agent.market_makers.RLTabularMarketMakerAgent2 import RLTabularMarketMakerAgent2
 from agent.examples.MomentumAgent import MomentumAgent
 from model.LatencyModel import LatencyModel
 
@@ -52,13 +51,13 @@ parser.add_argument('-d', '--historical-date',
                     help='historical date being simulated in format YYYYMMDD.')
 parser.add_argument('--start-time',
                     default='09:30:00',
-                    type=parse,
-                    help='Starting time of simulation.'
+                    type=str,
+                    help='Starting time of simulation (timedelta string, e.g., HH:MM:SS).'
                     )
 parser.add_argument('--end-time',
                     default='11:30:00',
-                    type=parse,
-                    help='Ending time of simulation.'
+                    type=str,
+                    help='Ending time of simulation (timedelta string, e.g., up to 168:00:00).'
                     )
 parser.add_argument('-l',
                     '--log_dir',
@@ -79,7 +78,7 @@ parser.add_argument('--config_help',
 # Execution agent config
 # market maker config
 parser.add_argument('--mm-type',
-                    choices=['none', 'simple', 'adaptive', 'spread', 'rl_baseline', 'rl_tabular', 'rl_tabular2'],
+                    choices=['none', 'simple', 'adaptive', 'spread', 'rl_baseline', 'rl_tabular'],
                     default='none',
                     help='Which market maker class to use (or none).')
 parser.add_argument('--mm-pov',
@@ -143,6 +142,10 @@ seed = args.seed  # Random seed specification on the command line.
 if not seed: seed = int(pd.Timestamp.now().timestamp() * 1000000) % (2 ** 32 - 1)
 np.random.seed(seed)
 
+# Convert start/end times to timedeltas to allow multi-day (e.g., >24h) horizons.
+start_delta = pd.to_timedelta(args.start_time)
+end_delta = pd.to_timedelta(args.end_time)
+
 util.silent_mode = not args.verbose
 LimitOrder.silent_mode = not args.verbose
 
@@ -158,8 +161,8 @@ print("Configuration seed: {}\n".format(seed))
 
 # Historical date to simulate.
 historical_date = pd.to_datetime(args.historical_date)
-mkt_open = historical_date + pd.to_timedelta(args.start_time.strftime('%H:%M:%S'))
-mkt_close = historical_date + pd.to_timedelta(args.end_time.strftime('%H:%M:%S'))
+mkt_open = historical_date + start_delta
+mkt_close = historical_date + end_delta
 agent_count, agents, agent_types = 0, [], []
 
 # Hyperparameters
@@ -207,9 +210,9 @@ agent_count += 1
 
 # 2) Noise Agents
 num_noise = 0
-noise_mkt_open = historical_date + pd.to_timedelta("09:00:00")  # These times needed for distribution of arrival times
+noise_mkt_open = historical_date + pd.to_timedelta("00:10:00")  # These times needed for distribution of arrival times
                                                                 # of Noise Agents
-noise_mkt_close = historical_date + pd.to_timedelta("16:00:00")
+noise_mkt_close = historical_date + pd.to_timedelta("23:50:00")
 agents.extend([NoiseAgent(id=j,
                           name="NoiseAgent {}".format(j),
                           type="NoiseAgent",
@@ -327,14 +330,14 @@ def build_market_maker(idx, agent_id):
                                   wake_up_freq=args.mm_wake_up_freq,
                                   base_size=args.mm_size,
                                   offsets=[1, 2, 3],
-                                  epsilon=0.1,
+                                  epsilon=1.0,
                                   alpha=0.1,
                                   gamma=0.95,
                                   inventory_clip=100,
                                   spread_clip=7,
                                   inventory_bin=10,
                                   spread_bin=1,
-                                  inventory_penalty=1e-2,
+                                  inventory_penalty=1.0,
                                   inventory_limit=100,
                                   log_orders=log_orders,
                                   random_state=rstate)
@@ -348,42 +351,18 @@ def build_market_maker(idx, agent_id):
                                          starting_cash=starting_cash,
                                          wake_up_freq=mm_wake,
                                          base_size=args.mm_size,
-                                         base_offsets=[1, 2, 3],
-                                         skew_levels=[-1, 0, 1],
-                                         epsilon=0.1,
+                                         base_offsets=[5, 15, 25, 35],
+                                         epsilon=1.0,
                                          alpha=0.1,
                                          gamma=0.95,
                                          inventory_clip=100,
                                          spread_clip=7,
                                          inventory_bin=10,
                                          spread_bin=1,
-                                         inventory_penalty=1e-2,
+                                         inventory_penalty=1.0,
                                          inventory_limit=100,
                                          log_orders=log_orders,
                                          random_state=rstate)
-
-    if args.mm_type == 'rl_tabular2':
-        mm_wake = '3s'
-        return RLTabularMarketMakerAgent2(id=agent_id,
-                                          name="RL_TABULAR2_MARKET_MAKER_AGENT_{}".format(idx),
-                                          type='RLTabularMarketMakerAgent2',
-                                          symbol=symbol,
-                                          starting_cash=starting_cash,
-                                          wake_up_freq=mm_wake,
-                                          base_size=args.mm_size,
-                                          base_offsets=[1, 2, 3],
-                                          skew_levels=[-1, 0, 1],
-                                          epsilon=0.1,
-                                          alpha=0.1,
-                                          gamma=0.95,
-                                          inventory_clip=100,
-                                          spread_clip=7,
-                                          inventory_bin=10,
-                                          spread_bin=1,
-                                          inventory_penalty=1e-2,
-                                          inventory_limit=100,
-                                          log_orders=log_orders,
-                                          random_state=rstate)
 
     raise ValueError(f"Unknown mm_type {args.mm_type}")
 

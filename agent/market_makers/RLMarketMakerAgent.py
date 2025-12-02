@@ -28,6 +28,7 @@ class RLMarketMakerAgent(TradingAgent):
                  inventory_bin=100,
                  spread_bin=1,
                  inventory_penalty=0.0,
+                 epsilon_half_life_hours=5,
                  log_orders=False,
                  random_state=None):
 
@@ -45,6 +46,14 @@ class RLMarketMakerAgent(TradingAgent):
         self.spread_bin = spread_bin
         self.inventory_penalty = inventory_penalty
         self.state = 'AWAITING_WAKEUP'
+        self.step_count = 0
+        # decay steps based on wake_up_freq and half-life
+        try:
+            wake_seconds = pd.Timedelta(self.wake_up_freq).total_seconds()
+        except Exception:
+            wake_seconds = 1.0
+        half_life_seconds = epsilon_half_life_hours * 3600.0
+        self.epsilon_decay_steps = max(1, int(np.ceil(half_life_seconds / wake_seconds)))
 
         # Q-table: dict mapping (state, action_idx) -> value
         self.q = {}
@@ -113,7 +122,9 @@ class RLMarketMakerAgent(TradingAgent):
         return (inv_bin, spr_bin)
 
     def _choose_action(self, state):
-        if self.random_state.rand() < self.epsilon:
+        self.step_count += 1
+        eps = self.epsilon * (0.5 ** (self.step_count / self.epsilon_decay_steps))
+        if self.random_state.rand() < eps:
             return self.random_state.randint(0, len(self.offsets))
         qs = [self.q.get((state, a), 0.0) for a in range(len(self.offsets))]
         return int(np.argmax(qs))

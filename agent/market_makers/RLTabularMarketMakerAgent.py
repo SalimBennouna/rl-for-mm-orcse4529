@@ -9,7 +9,7 @@ class RLTabularMarketMakerAgent(TradingAgent):
     Tabular SARSA/Q-learning market maker with fixed size and single-level quotes.
 
     State: (inventory_bin, spread_bin)
-    Action: choose a base offset and skew level to set bid/ask offsets asymmetrically.
+    Action: independently choose bid/ask offsets (or skip a side) at fixed distances from mid.
 
     Reward: incremental mark-to-market PnL minus inventory penalty.
     """
@@ -17,7 +17,7 @@ class RLTabularMarketMakerAgent(TradingAgent):
     def __init__(self, id, name, type, symbol, starting_cash,
                  wake_up_freq='3s',
                  base_size=60,
-                 base_offsets=(1, 2, 3),
+                 base_offsets=(5, 15, 25, 35),
                  skew_levels=(-1, 0, 1),
                  epsilon=0.1,
                  alpha=0.1,
@@ -28,6 +28,7 @@ class RLTabularMarketMakerAgent(TradingAgent):
                  spread_bin=1,
                  inventory_penalty=0.0,
                  inventory_limit=100,
+                 epsilon_half_life_hours=5,
                  log_orders=False,
                  random_state=None):
 
@@ -37,8 +38,7 @@ class RLTabularMarketMakerAgent(TradingAgent):
         self.base_size = base_size
         self.base_offsets = list(base_offsets)
         self.skew_levels = list(skew_levels)
-        self.actions = [(b, s) for b in self.base_offsets for s in self.skew_levels]
-        self.actions.append(('no_quote', 0))
+        self.actions = self._build_actions()
         self.epsilon = epsilon
         self.alpha = alpha
         self.gamma = gamma
@@ -48,6 +48,13 @@ class RLTabularMarketMakerAgent(TradingAgent):
         self.spread_bin = spread_bin
         self.inventory_penalty = inventory_penalty
         self.inventory_limit = inventory_limit
+        self.step_count = 0
+        try:
+            wake_seconds = pd.Timedelta(self.wake_up_freq).total_seconds()
+        except Exception:
+            wake_seconds = 1.0
+        half_life_seconds = epsilon_half_life_hours * 3600.0
+        self.epsilon_decay_steps = max(1, int(np.ceil(half_life_seconds / wake_seconds)))
 
         self.q = {}
         self.last_state = None
@@ -55,6 +62,14 @@ class RLTabularMarketMakerAgent(TradingAgent):
         self.last_mtm = 0
         self.cum_reward = 0
         self.state = 'AWAITING_WAKEUP'
+
+    def _build_actions(self):
+        """
+        Build independent bid/ask offset combinations.
+        Offsets are distances from mid in ticks; None means skip that side.
+        """
+        offsets = [None] + self.base_offsets
+        return [(bid, ask) for bid in offsets for ask in offsets]
 
     def kernelStarting(self, startTime):
         super().kernelStarting(startTime)
@@ -80,24 +95,22 @@ class RLTabularMarketMakerAgent(TradingAgent):
             state = self._discretize_state(spread, self.getHoldings(self.symbol))
 
             mtm = self._mark_to_market(mid)
-            reward = mtm - self.last_mtm - self.inventory_penalty * (self.getHoldings(self.symbol) ** 2)
+            inv = self.getHoldings(self.symbol)
+            reward = - self.inventory_penalty * (abs(inv) ** 3)
             self.cum_reward += reward
 
             action_idx = self._choose_action(state)
             if self.last_state is not None and self.last_action is not None:
                 self._update_q(self.last_state, self.last_action, reward, state, action_idx)
 
-            action = self.actions[action_idx]
-            if action[0] == 'no_quote':
+            bid_offset, ask_offset = self.actions[action_idx]
+            if bid_offset is None and ask_offset is None:
                 # Cancel existing orders and do not place new ones
                 self.cancelOrders()
             else:
-                bid_offset, skew = action
-                bid_off = max(1, bid_offset + skew)
-                ask_off = max(1, bid_offset - skew)
                 # Place new quotes before canceling old ones to avoid empty book
                 old_order_ids = list(self.orders.keys())
-                self._place_quotes(mid, bid_off, ask_off)
+                self._place_quotes(mid, bid_offset, ask_offset)
                 for oid in old_order_ids:
                     if oid in self.orders:
                         self.cancelOrder(self.orders[oid])
@@ -111,12 +124,12 @@ class RLTabularMarketMakerAgent(TradingAgent):
             self.state = 'AWAITING_WAKEUP'
 
     def _place_quotes(self, mid, bid_offset, ask_offset):
-        bid_price = int(mid - bid_offset)
-        ask_price = int(mid + ask_offset)
         inv = self.getHoldings(self.symbol)
-        if inv < self.inventory_limit:
+        if bid_offset is not None and inv < self.inventory_limit:
+            bid_price = int(mid - bid_offset)
             self.placeLimitOrder(self.symbol, self.base_size, True, bid_price)
-        if inv > -self.inventory_limit:
+        if ask_offset is not None and inv > -self.inventory_limit:
+            ask_price = int(mid + ask_offset)
             self.placeLimitOrder(self.symbol, self.base_size, False, ask_price)
 
     def _discretize_state(self, spread, inventory):
@@ -127,7 +140,9 @@ class RLTabularMarketMakerAgent(TradingAgent):
         return (inv_bin, spr_bin)
 
     def _choose_action(self, state):
-        if self.random_state.rand() < self.epsilon:
+        self.step_count += 1
+        eps = self.epsilon * (0.5 ** (self.step_count / self.epsilon_decay_steps))
+        if self.random_state.rand() < eps:
             return self.random_state.randint(0, len(self.actions))
         qs = [self.q.get((state, a), 0.0) for a in range(len(self.actions))]
         return int(np.argmax(qs))
@@ -164,6 +179,8 @@ class RLTabularMarketMakerAgent(TradingAgent):
             'cash': self.holdings['CASH'],
             'mtm': self._mark_to_market(mid),
             'last_action': action_idx,
+            'bid_offset': self.actions[action_idx][0],
+            'ask_offset': self.actions[action_idx][1],
             'greedy_action': greedy_action,
             'inventory_bin': inv_bin,
             'spread_bin': spr_bin,
