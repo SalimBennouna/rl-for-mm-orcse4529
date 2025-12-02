@@ -41,7 +41,7 @@ class ValueAgent(TradingAgent):
         self.prev_wake_time = None
 
         self.percent_aggr = 0.1                 #percent of time that the agent will aggress the spread
-        self.size = np.random.randint(20, 50)   #size that the agent will be placing
+        self.size = np.random.randint(1, 6)     #size that the agent will be placing
         self.depth_spread = 2
 
     def kernelStarting(self, startTime):

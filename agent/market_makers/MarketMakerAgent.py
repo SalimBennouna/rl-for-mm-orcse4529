@@ -26,7 +26,8 @@ class MarketMakerAgent(TradingAgent):
     """
 
     def __init__(self, id, name, type, symbol, starting_cash, min_size, max_size , wake_up_freq='1s',
-                 subscribe=False, subscribe_freq=10e9, subscribe_num_levels=1, log_orders=False, random_state=None):
+                 subscribe=False, subscribe_freq=10e9, subscribe_num_levels=1, log_orders=False, random_state=None,
+                 inventory_limit=100):
 
         super().__init__(id, name, type, starting_cash=starting_cash, log_orders=log_orders, random_state=random_state)
         self.symbol = symbol      # Symbol traded
@@ -46,6 +47,7 @@ class MarketMakerAgent(TradingAgent):
         self.num_levels = None
         self.size_split = None
         self.last_spread = 10
+        self.inventory_limit = inventory_limit
 
     def kernelStarting(self, startTime):
         super().kernelStarting(startTime)
@@ -58,7 +60,6 @@ class MarketMakerAgent(TradingAgent):
             self.subscription_requested = True
             self.state = 'AWAITING_MARKET_DATA'
         elif can_trade and not self.subscribe:
-            self.cancelOrders()
             self.getCurrentSpread(self.symbol, depth=self.subscribe_num_levels)
             self.state = 'AWAITING_SPREAD'
 
@@ -66,7 +67,6 @@ class MarketMakerAgent(TradingAgent):
         """ Market Maker actions are determined after obtaining the bids and asks in the LOB """
         super().receiveMessage(currentTime, msg)
         if not self.subscribe and self.state == 'AWAITING_SPREAD' and msg.body['msg'] == 'QUERY_SPREAD':
-            self.cancelOrders()
             mid = self.last_trade[self.symbol] if self.last_trade[self.symbol] is not None else None
 
             self.num_levels = 1   # Number of price levels to place the trades in
@@ -80,9 +80,17 @@ class MarketMakerAgent(TradingAgent):
                 log_print(f"SPREAD MISSING at time {currentTime}")
                 spread = self.last_spread
 
-            # Single level per side at mid +/- spread
-            self.placeLimitOrder(self.symbol, self.size, True, mid - spread)
-            self.placeLimitOrder(self.symbol, self.size, False, mid + spread)
+            # Place new quotes before canceling old ones to avoid empty book
+            old_order_ids = list(self.orders.keys())
+            # Respect inventory limit: skip buying if long beyond limit, skip selling if short beyond limit.
+            inv = self.getHoldings(self.symbol)
+            if inv < self.inventory_limit:
+                self.placeLimitOrder(self.symbol, self.size, True, mid - spread)
+            if inv > -self.inventory_limit:
+                self.placeLimitOrder(self.symbol, self.size, False, mid + spread)
+            for oid in old_order_ids:
+                if oid in self.orders:
+                    self.cancelOrder(self.orders[oid])
 
             # Log state for downstream analysis
             self._log_state(currentTime, mid, spread)

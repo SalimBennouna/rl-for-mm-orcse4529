@@ -22,11 +22,12 @@ class RLTabularMarketMakerAgent(TradingAgent):
                  epsilon=0.1,
                  alpha=0.1,
                  gamma=0.95,
-                 inventory_clip=1000,
-                 spread_clip=50,
-                 inventory_bin=100,
+                 inventory_clip=100,
+                 spread_clip=7,
+                 inventory_bin=10,
                  spread_bin=1,
                  inventory_penalty=0.0,
+                 inventory_limit=100,
                  log_orders=False,
                  random_state=None):
 
@@ -37,6 +38,7 @@ class RLTabularMarketMakerAgent(TradingAgent):
         self.base_offsets = list(base_offsets)
         self.skew_levels = list(skew_levels)
         self.actions = [(b, s) for b in self.base_offsets for s in self.skew_levels]
+        self.actions.append(('no_quote', 0))
         self.epsilon = epsilon
         self.alpha = alpha
         self.gamma = gamma
@@ -45,6 +47,7 @@ class RLTabularMarketMakerAgent(TradingAgent):
         self.inventory_bin = inventory_bin
         self.spread_bin = spread_bin
         self.inventory_penalty = inventory_penalty
+        self.inventory_limit = inventory_limit
 
         self.q = {}
         self.last_state = None
@@ -60,7 +63,6 @@ class RLTabularMarketMakerAgent(TradingAgent):
     def wakeup(self, currentTime):
         can_trade = super().wakeup(currentTime)
         if can_trade:
-            self.cancelOrders()
             self.getCurrentSpread(self.symbol, depth=1)
             self.state = 'AWAITING_SPREAD'
 
@@ -85,11 +87,20 @@ class RLTabularMarketMakerAgent(TradingAgent):
             if self.last_state is not None and self.last_action is not None:
                 self._update_q(self.last_state, self.last_action, reward, state, action_idx)
 
-            bid_offset, skew = self.actions[action_idx]
-            # Skew: tighten one side, widen the other
-            bid_off = max(1, bid_offset + skew)
-            ask_off = max(1, bid_offset - skew)
-            self._place_quotes(mid, bid_off, ask_off)
+            action = self.actions[action_idx]
+            if action[0] == 'no_quote':
+                # Cancel existing orders and do not place new ones
+                self.cancelOrders()
+            else:
+                bid_offset, skew = action
+                bid_off = max(1, bid_offset + skew)
+                ask_off = max(1, bid_offset - skew)
+                # Place new quotes before canceling old ones to avoid empty book
+                old_order_ids = list(self.orders.keys())
+                self._place_quotes(mid, bid_off, ask_off)
+                for oid in old_order_ids:
+                    if oid in self.orders:
+                        self.cancelOrder(self.orders[oid])
 
             self._log_state(currentTime, mid, spread, state, action_idx, reward)
 
@@ -102,8 +113,11 @@ class RLTabularMarketMakerAgent(TradingAgent):
     def _place_quotes(self, mid, bid_offset, ask_offset):
         bid_price = int(mid - bid_offset)
         ask_price = int(mid + ask_offset)
-        self.placeLimitOrder(self.symbol, self.base_size, True, bid_price)
-        self.placeLimitOrder(self.symbol, self.base_size, False, ask_price)
+        inv = self.getHoldings(self.symbol)
+        if inv < self.inventory_limit:
+            self.placeLimitOrder(self.symbol, self.base_size, True, bid_price)
+        if inv > -self.inventory_limit:
+            self.placeLimitOrder(self.symbol, self.base_size, False, ask_price)
 
     def _discretize_state(self, spread, inventory):
         inv = int(np.clip(inventory, -self.inventory_clip, self.inventory_clip))
@@ -139,6 +153,9 @@ class RLTabularMarketMakerAgent(TradingAgent):
 
     def _log_state(self, currentTime, mid, spread, state, action_idx, reward):
         inv_bin, spr_bin = state
+        qs = [self.q.get((state, a), 0.0) for a in range(len(self.actions))]
+        q_max = max(qs) if qs else 0.0
+        greedy_action = int(np.argmax(qs)) if qs else None
         self.logEvent('STATE', {
             'time': currentTime,
             'mid': mid,
@@ -147,8 +164,10 @@ class RLTabularMarketMakerAgent(TradingAgent):
             'cash': self.holdings['CASH'],
             'mtm': self._mark_to_market(mid),
             'last_action': action_idx,
+            'greedy_action': greedy_action,
             'inventory_bin': inv_bin,
             'spread_bin': spr_bin,
             'reward': reward,
             'cum_reward': self.cum_reward,
+            'q_max': q_max,
         })

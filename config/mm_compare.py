@@ -122,7 +122,7 @@ parser.add_argument('--mm-backstop-quantity',
                     default=50000)
 parser.add_argument('--mm-size',
                     type=int,
-                    default=60,
+                    default=10,
                     help='Fixed size for market maker orders')
 
 parser.add_argument('--fund-vol',
@@ -168,7 +168,7 @@ starting_cash = 10000000  # Cash in this simulator is always in CENTS.
 r_bar = 1e5
 sigma_n = r_bar / 1000  # further lower observation noise for value agents
 kappa = 1.67e-15
-lambda_a = 7e-11
+lambda_a = 7e-11  # slower arrival rate for value agent trades (around ~14s mean)
 
 # Oracle
 symbols = {symbol: {'r_bar': r_bar,
@@ -205,7 +205,7 @@ agent_types.extend("ExchangeAgent")
 agent_count += 1
 
 # 2) Noise Agents
-num_noise = 0
+num_noise = 100
 noise_mkt_open = historical_date + pd.to_timedelta("09:00:00")  # These times needed for distribution of arrival times
                                                                 # of Noise Agents
 noise_mkt_close = historical_date + pd.to_timedelta("16:00:00")
@@ -277,6 +277,7 @@ def build_market_maker(idx, agent_id):
                                 max_size=args.mm_size,
                                 wake_up_freq=mm_wake,
                                 subscribe=False,
+                                inventory_limit=100,
                                 log_orders=log_orders,
                                 random_state=rstate)
 
@@ -328,11 +329,12 @@ def build_market_maker(idx, agent_id):
                                   epsilon=0.1,
                                   alpha=0.1,
                                   gamma=0.95,
-                                  inventory_clip=1000,
-                                  spread_clip=50,
-                                  inventory_bin=100,
+                                  inventory_clip=100,
+                                  spread_clip=7,
+                                  inventory_bin=10,
                                   spread_bin=1,
-                                  inventory_penalty=0.0,
+                                  inventory_penalty=1e-2,
+                                  inventory_limit=100,
                                   log_orders=log_orders,
                                   random_state=rstate)
 
@@ -350,11 +352,12 @@ def build_market_maker(idx, agent_id):
                                          epsilon=0.1,
                                          alpha=0.1,
                                          gamma=0.95,
-                                         inventory_clip=1000,
-                                         spread_clip=50,
-                                         inventory_bin=100,
+                                         inventory_clip=100,
+                                         spread_clip=7,
+                                         inventory_bin=10,
                                          spread_bin=1,
-                                         inventory_penalty=0.0,
+                                         inventory_penalty=1e-2,
+                                         inventory_limit=100,
                                          log_orders=log_orders,
                                          random_state=rstate)
 
@@ -368,7 +371,7 @@ agent_types.extend([args.mm_type] * num_mm_agents)
 
 
 # 5) Zero Intelligence Agents
-num_zi_agents = 0
+num_zi_agents = 5
 agents.extend([ZeroIntelligenceAgent(id=j,
                                      name="ZI_AGENT_{}".format(j),
                                      type="ZeroIntelligenceAgent",
@@ -392,7 +395,7 @@ agent_count += num_zi_agents
 agent_types.extend(['ZeroIntelligenceAgent'])
 
 # 6) Heuristic Belief Learning Agents
-num_hbl_agents = 0
+num_hbl_agents = 5
 agents.extend([HeuristicBeliefLearningAgent(id=j,
                                             name="HBL_AGENT_{}".format(j),
                                             type="HeuristicBeliefLearningAgent",
