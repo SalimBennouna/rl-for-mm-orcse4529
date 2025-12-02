@@ -29,6 +29,7 @@ from agent.market_makers.MarketMakerAgent import MarketMakerAgent
 from agent.market_makers.SpreadBasedMarketMakerAgent import SpreadBasedMarketMakerAgent
 from agent.market_makers.RLMarketMakerAgent import RLMarketMakerAgent
 from agent.market_makers.RLTabularMarketMakerAgent import RLTabularMarketMakerAgent
+from agent.market_makers.RLTabularMarketMakerAgent2 import RLTabularMarketMakerAgent2
 from agent.examples.MomentumAgent import MomentumAgent
 from model.LatencyModel import LatencyModel
 
@@ -78,7 +79,7 @@ parser.add_argument('--config_help',
 # Execution agent config
 # market maker config
 parser.add_argument('--mm-type',
-                    choices=['none', 'simple', 'adaptive', 'spread', 'rl_baseline', 'rl_tabular'],
+                    choices=['none', 'simple', 'adaptive', 'spread', 'rl_baseline', 'rl_tabular', 'rl_tabular2'],
                     default='none',
                     help='Which market maker class to use (or none).')
 parser.add_argument('--mm-pov',
@@ -205,7 +206,7 @@ agent_types.extend("ExchangeAgent")
 agent_count += 1
 
 # 2) Noise Agents
-num_noise = 100
+num_noise = 0
 noise_mkt_open = historical_date + pd.to_timedelta("09:00:00")  # These times needed for distribution of arrival times
                                                                 # of Noise Agents
 noise_mkt_close = historical_date + pd.to_timedelta("16:00:00")
@@ -361,6 +362,29 @@ def build_market_maker(idx, agent_id):
                                          log_orders=log_orders,
                                          random_state=rstate)
 
+    if args.mm_type == 'rl_tabular2':
+        mm_wake = '3s'
+        return RLTabularMarketMakerAgent2(id=agent_id,
+                                          name="RL_TABULAR2_MARKET_MAKER_AGENT_{}".format(idx),
+                                          type='RLTabularMarketMakerAgent2',
+                                          symbol=symbol,
+                                          starting_cash=starting_cash,
+                                          wake_up_freq=mm_wake,
+                                          base_size=args.mm_size,
+                                          base_offsets=[1, 2, 3],
+                                          skew_levels=[-1, 0, 1],
+                                          epsilon=0.1,
+                                          alpha=0.1,
+                                          gamma=0.95,
+                                          inventory_clip=100,
+                                          spread_clip=7,
+                                          inventory_bin=10,
+                                          spread_bin=1,
+                                          inventory_penalty=1e-2,
+                                          inventory_limit=100,
+                                          log_orders=log_orders,
+                                          random_state=rstate)
+
     raise ValueError(f"Unknown mm_type {args.mm_type}")
 
 
@@ -371,7 +395,7 @@ agent_types.extend([args.mm_type] * num_mm_agents)
 
 
 # 5) Zero Intelligence Agents
-num_zi_agents = 5
+num_zi_agents = 0
 agents.extend([ZeroIntelligenceAgent(id=j,
                                      name="ZI_AGENT_{}".format(j),
                                      type="ZeroIntelligenceAgent",
@@ -395,7 +419,7 @@ agent_count += num_zi_agents
 agent_types.extend(['ZeroIntelligenceAgent'])
 
 # 6) Heuristic Belief Learning Agents
-num_hbl_agents = 5
+num_hbl_agents = 0
 agents.extend([HeuristicBeliefLearningAgent(id=j,
                                             name="HBL_AGENT_{}".format(j),
                                             type="HeuristicBeliefLearningAgent",
