@@ -50,9 +50,7 @@ class Kernel:
   # configuration is done.
   def runner(self, agents = [], startTime = None, stopTime = None,
              num_simulations = 1, defaultComputationDelay = 1,
-             defaultLatency = 1, agentLatency = None, latencyNoise = [ 1.0 ],
-             agentLatencyModel = None, skip_log = False,
-             seed = None, oracle = None, log_dir = None):
+             skip_log = False, seed = None, oracle = None, log_dir = None):
 
     # agents must be a list of agents for the simulation,
     #        based on class agent.Agent
@@ -103,28 +101,6 @@ class Kernel:
     # penalty applies _after_ the agent acts, before it may act again.
     # TODO: this might someday change to pd.Timedelta objects.
     self.agentComputationDelays = [defaultComputationDelay] * len(agents)
-
-    # If an agentLatencyModel is defined, it will be used instead of
-    # the older, non-model-based attributes.
-    self.agentLatencyModel = agentLatencyModel
-
-    # If an agentLatencyModel is NOT defined, the older parameters:
-    # agentLatency (or defaultLatency) and latencyNoise should be specified.
-    # These should be considered deprecated and will be removed in the future.
-
-    # If agentLatency is not defined, define it using the defaultLatency.
-    # This matrix defines the communication delay between every pair of
-    # agents.
-    if agentLatency is None:
-      self.agentLatency = [[defaultLatency] * len(agents)] * len(agents)
-    else:
-      self.agentLatency = agentLatency
-
-    # There is a noise model for latency, intended to be a one-sided
-    # distribution with the peak at zero.  By default there is no noise
-    # (100% chance to add zero ns extra delay).  Format is a list with
-    # list index = ns extra delay, value = probability of this delay.
-    self.latencyNoise = latencyNoise
 
     # The kernel maintains an accumulating additional delay parameter
     # for the current agent.  This is applied to each message sent
@@ -367,21 +343,12 @@ class Kernel:
     sentTime = self.currentTime + pd.Timedelta(self.agentComputationDelays[sender] + 
                                                self.currentAgentAdditionalDelay + delay)
 
-    # Apply communication delay per the agentLatencyModel, if defined, or the
-    # agentLatency matrix [sender][recipient] otherwise.
-    if self.agentLatencyModel is not None:
-      latency = self.agentLatencyModel.get_latency(sender_id = sender, recipient_id = recipient)
-      deliverAt = sentTime + pd.Timedelta(latency)
-      log_print ("Kernel applied latency {}, accumulated delay {}, one-time delay {} on sendMessage from: {} to {}, scheduled for {}",
-                 latency, self.currentAgentAdditionalDelay, delay, self.agents[sender].name, self.agents[recipient].name,
-                 self.fmtTime(deliverAt))
-    else:
-      latency = self.agentLatency[sender][recipient]
-      noise = self.random_state.choice(len(self.latencyNoise), 1, self.latencyNoise)[0]
-      deliverAt = sentTime + pd.Timedelta(latency + noise)
-      log_print ("Kernel applied latency {}, noise {}, accumulated delay {}, one-time delay {} on sendMessage from: {} to {}, scheduled for {}",
-                 latency, noise, self.currentAgentAdditionalDelay, delay, self.agents[sender].name, self.agents[recipient].name,
-                 self.fmtTime(deliverAt))
+    # Deliver messages immediately after computation (no network latency).
+    latency = 1  # nanoseconds
+    deliverAt = sentTime + pd.Timedelta(latency)
+    log_print ("Kernel applied latency {}, accumulated delay {}, one-time delay {} on sendMessage from: {} to {}, scheduled for {}",
+               latency, self.currentAgentAdditionalDelay, delay, self.agents[sender].name, self.agents[recipient].name,
+               self.fmtTime(deliverAt))
 
     # Finally drop the message in the queue with priority == delivery time.
     self.messages.put((deliverAt, (recipient, MessageType.MESSAGE, msg)))
@@ -563,4 +530,3 @@ class Kernel:
     ns = int(ns - (s * 1000000000))
 
     return "{:02d}:{:02d}:{:02d}.{:09d}".format(hr, m, s, ns)
-

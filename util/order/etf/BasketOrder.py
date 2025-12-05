@@ -5,7 +5,7 @@
 
 from util.order.Order import Order
 from Kernel import Kernel
-from agent.FinancialAgent import dollarize
+from agent.Agent import dollarize
 
 import sys
 

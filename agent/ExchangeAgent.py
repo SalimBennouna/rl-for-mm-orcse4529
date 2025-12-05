@@ -4,7 +4,7 @@
 # the levels of order stream history to maintain per symbol (maintains all orders that led to the last N trades),
 # whether to log all order activity to the agent log, and a random state object (already seeded) to use
 # for stochasticity.
-from agent.FinancialAgent import FinancialAgent
+from agent.Agent import Agent
 from message.Message import Message
 from util.OrderBook import OrderBook
 from util.util import log_print
@@ -21,7 +21,7 @@ pd.set_option('display.max_rows', 500)
 from copy import deepcopy
 
 
-class ExchangeAgent(FinancialAgent):
+class ExchangeAgent(Agent):
 
   def __init__(self, id, name, type, mkt_open, mkt_close, symbols, book_freq='S', wide_book=False, pipeline_delay = 40000,
                computation_delay = 1, stream_history = 0, log_orders = False, random_state = None):

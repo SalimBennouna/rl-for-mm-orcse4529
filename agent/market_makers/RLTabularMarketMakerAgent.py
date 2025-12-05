@@ -26,7 +26,7 @@ class RLTabularMarketMakerAgent(TradingAgent):
                  spread_clip=80,
                  inventory_bin=10,
                  spread_bin=5,
-                 inventory_penalty=0.0,
+                 inventory_penalty=10.0,
                  inventory_limit=100,
                  epsilon_half_life_hours=5,
                  log_orders=False,
@@ -62,6 +62,7 @@ class RLTabularMarketMakerAgent(TradingAgent):
         self.last_mtm = 0
         self.cum_reward = 0
         self.state = 'AWAITING_WAKEUP'
+        self.last_spread = 10  # fallback when book is one-sided
 
     def _build_actions(self):
         """
@@ -86,17 +87,22 @@ class RLTabularMarketMakerAgent(TradingAgent):
         if self.state == 'AWAITING_SPREAD' and msg.body['msg'] == 'QUERY_SPREAD':
             bid, _, ask, _ = self.getKnownBidAsk(self.symbol)
             if not (bid and ask):
-                log_print(f"{self.name}: missing spread at {currentTime}, skipping quote")
-                self.setWakeup(currentTime + self.getWakeFrequency())
-                return
-
-            mid = (bid + ask) / 2
-            spread = ask - bid
+                # Use last trade + last spread to seed the book instead of sitting out.
+                mid = self.last_trade.get(self.symbol)
+                if mid is None:
+                    log_print(f"{self.name}: missing spread and no last trade at {currentTime}, skipping quote")
+                    self.setWakeup(currentTime + self.getWakeFrequency())
+                    return
+                spread = self.last_spread
+            else:
+                mid = (bid + ask) / 2
+                spread = ask - bid
+                self.last_spread = spread
             state = self._discretize_state(spread, self.getHoldings(self.symbol))
 
             mtm = self._mark_to_market(mid)
             inv = self.getHoldings(self.symbol)
-            reward = - self.inventory_penalty * (abs(inv) ** 3)
+            reward = self._compute_reward(mtm, inv)
             self.cum_reward += reward
 
             action_idx = self._choose_action(state)
@@ -146,6 +152,10 @@ class RLTabularMarketMakerAgent(TradingAgent):
             return self.random_state.randint(0, len(self.actions))
         qs = [self.q.get((state, a), 0.0) for a in range(len(self.actions))]
         return int(np.argmax(qs))
+
+    def _compute_reward(self, mtm, inv):
+        # Default reward: inventory penalty only.
+        return - self.inventory_penalty * (abs(inv) ** 2)
 
     def _update_q(self, state, action, reward, next_state, next_action):
         key = (state, action)

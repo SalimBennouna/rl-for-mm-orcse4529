@@ -1,4 +1,4 @@
-from agent.FinancialAgent import FinancialAgent
+from agent.Agent import Agent
 from agent.ExchangeAgent import ExchangeAgent
 from message.Message import Message
 from util.order.LimitOrder import LimitOrder
@@ -8,12 +8,12 @@ from util.util import log_print
 from copy import deepcopy
 import sys
 
-# The TradingAgent class (via FinancialAgent, via Agent) is intended as the
-# base class for all trading agents (i.e. not things like exchanges) in a
-# market simulation.  It handles a lot of messaging (inbound and outbound)
-# and state maintenance automatically, so subclasses can focus just on
-# implementing a strategy without too much bookkeeping.
-class TradingAgent(FinancialAgent):
+# The TradingAgent class (via Agent) is intended as the base class for all
+# trading agents (i.e. not things like exchanges) in a market simulation.
+# It handles a lot of messaging (inbound and outbound) and state maintenance
+# automatically, so subclasses can focus just on implementing a strategy
+# without too much bookkeeping.
+class TradingAgent(Agent):
 
   def __init__(self, id, name, type, random_state=None, starting_cash=100000, log_orders=False, log_to_file=True):
     # Base class init.

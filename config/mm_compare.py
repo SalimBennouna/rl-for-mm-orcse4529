@@ -24,13 +24,11 @@ from agent.NoiseAgent import NoiseAgent
 from agent.ValueAgent import ValueAgent
 from agent.ZeroIntelligenceAgent import ZeroIntelligenceAgent
 from agent.HeuristicBeliefLearningAgent import HeuristicBeliefLearningAgent
-from agent.market_makers.AdaptiveMarketMakerAgent import AdaptiveMarketMakerAgent
 from agent.market_makers.MarketMakerAgent import MarketMakerAgent
-from agent.market_makers.SpreadBasedMarketMakerAgent import SpreadBasedMarketMakerAgent
 from agent.market_makers.RLMarketMakerAgent import RLMarketMakerAgent
 from agent.market_makers.RLTabularMarketMakerAgent import RLTabularMarketMakerAgent
-from agent.examples.MomentumAgent import MomentumAgent
-from model.LatencyModel import LatencyModel
+from agent.market_makers.RLTabularMarketMakerAgentV2 import RLTabularMarketMakerAgentV2
+from agent.MomentumAgent import MomentumAgent
 
 ########################################################################################################################
 ############################################### GENERAL CONFIG #########################################################
@@ -78,16 +76,12 @@ parser.add_argument('--config_help',
 # Execution agent config
 # market maker config
 parser.add_argument('--mm-type',
-                    choices=['none', 'simple', 'adaptive', 'spread', 'rl_baseline', 'rl_tabular'],
+                    choices=['none', 'simple', 'rl_baseline', 'rl_tabular', 'rl_tabular_2'],
                     default='none',
                     help='Which market maker class to use (or none).')
 parser.add_argument('--mm-pov',
                     type=float,
                     default=0.025
-                    )
-parser.add_argument('--mm-window-size',
-                    type=util.validate_window_size,
-                    default='adaptive'
                     )
 parser.add_argument('--mm-min-order-size',
                     type=int,
@@ -97,29 +91,10 @@ parser.add_argument('--mm-max-order-size',
                     type=int,
                     default=10
                     )
-parser.add_argument('--mm-num-ticks',
-                    type=int,
-                    default=10
-                    )
 parser.add_argument('--mm-wake-up-freq',
                     type=str,
                     default='10S'
                     )
-parser.add_argument('--mm-skew-beta',
-                    type=float,
-                    default=0
-                    )
-parser.add_argument('--mm-level-spacing',
-                    type=float,
-                    default=5
-                    )
-parser.add_argument('--mm-spread-alpha',
-                    type=float,
-                    default=0.75
-                    )
-parser.add_argument('--mm-backstop-quantity',
-                    type=float,
-                    default=50000)
 parser.add_argument('--mm-size',
                     type=int,
                     default=10,
@@ -127,7 +102,7 @@ parser.add_argument('--mm-size',
 
 parser.add_argument('--fund-vol',
                     type=float,
-                    default=1e-8,
+                    default=5e-9,
                     help='Volatility of fundamental time series.'
                     )
 
@@ -169,17 +144,18 @@ agent_count, agents, agent_types = 0, [], []
 symbol = args.ticker
 starting_cash = 10000000  # Cash in this simulator is always in CENTS.
 
-r_bar = 1e5
+r_bar = 100000
+# Half-life of 30 minutes expressed in nanoseconds to match OU time units.
+kappa = np.log(2) / pd.to_timedelta("30min").value
 sigma_n = r_bar / 1000  # further lower observation noise for value agents
-kappa = 1.67e-15
 lambda_a = 7e-11  # slower arrival rate for value agent trades (around ~14s mean)
 
 # Oracle
 symbols = {symbol: {'r_bar': r_bar,
-                    'kappa': 1.67e-16,
+                    'kappa': kappa,
                     'sigma_s': 0,
                     'fund_vol': args.fund_vol,
-                    'megashock_lambda_a': 2.77778e-18,
+                    'megashock_lambda_a': 2.7e-18,
                     'megashock_mean': 1e3,
                     'megashock_var': 5e4,
                     'random_state': np.random.RandomState(seed=np.random.randint(low=0, high=2 ** 32, dtype='uint64'))}}
@@ -244,31 +220,10 @@ agent_types.extend(['ValueAgent'])
 
 # 4) Market Maker Agents
 
-"""
-window_size ==  Spread of market maker (in ticks) around the mid price
-pov == Percentage of transacted volume seen in previous `mm_wake_up_freq` that
-       the market maker places at each level
-num_ticks == Number of levels to place orders in around the spread
-wake_up_freq == How often the market maker wakes up
-
-"""
-
-mm_window_size = args.mm_window_size
-if args.mm_type == 'spread':
-    try:
-        mm_window_size = int(mm_window_size)
-    except ValueError as exc:
-        raise ValueError("--mm-window-size must be an integer when mm-type is spread.") from exc
-
-# Single market maker tuple (window_size, pov, num_ticks, wake_up_freq, min_order_size)
-mm_params = [(mm_window_size, args.mm_pov, args.mm_num_ticks, args.mm_wake_up_freq, args.mm_min_order_size)]
-
 num_mm_agents = 0 if args.mm_type == 'none' else 1
-mm_cancel_limit_delay = 50  # 50 nanoseconds
 
 def build_market_maker(idx, agent_id):
     rstate = np.random.RandomState(seed=np.random.randint(low=0, high=2 ** 32, dtype='uint64'))
-    window_size, pov, num_ticks, wake_up_freq, min_order_size = mm_params[idx]
 
     if args.mm_type == 'simple':
         mm_wake = '3s'
@@ -284,42 +239,6 @@ def build_market_maker(idx, agent_id):
                                 inventory_limit=100,
                                 log_orders=log_orders,
                                 random_state=rstate)
-
-    if args.mm_type == 'adaptive':
-        mm_wake = '3s'
-        return AdaptiveMarketMakerAgent(id=agent_id,
-                                        name="ADAPTIVE_POV_MARKET_MAKER_AGENT_{}".format(idx),
-                                        type='AdaptivePOVMarketMakerAgent',
-                                        symbol=symbol,
-                                        starting_cash=starting_cash,
-                                        pov=0,  # fixed size via min_order_size
-                                        min_order_size=args.mm_size,
-                                        window_size=window_size,
-                                        num_ticks=1,
-                                        wake_up_freq=mm_wake,
-                                        cancel_limit_delay=mm_cancel_limit_delay,
-                                        skew_beta=args.mm_skew_beta,
-                                        level_spacing=args.mm_level_spacing,
-                                        spread_alpha=args.mm_spread_alpha,
-                                        backstop_quantity=args.mm_backstop_quantity,
-                                        log_orders=log_orders,
-                                        random_state=rstate)
-
-    if args.mm_type == 'spread':
-        if isinstance(window_size, str):
-            raise ValueError("--mm-window-size must be numeric when using spread-based market makers.")
-        return SpreadBasedMarketMakerAgent(id=agent_id,
-                                           name="SPREAD_MARKET_MAKER_AGENT_{}".format(idx),
-                                           type='SpreadBasedMarketMakerAgent',
-                                           symbol=symbol,
-                                           starting_cash=starting_cash,
-                                           order_size=min_order_size,
-                                           window_size=window_size,
-                                           num_ticks=num_ticks,
-                                           wake_up_freq=wake_up_freq,
-                                           subscribe=False,
-                                           log_orders=log_orders,
-                                           random_state=rstate)
 
     if args.mm_type == 'rl_baseline':
         return RLMarketMakerAgent(id=agent_id,
@@ -354,15 +273,37 @@ def build_market_maker(idx, agent_id):
                                          base_offsets=[5, 15, 25, 35],
                                          epsilon=1.0,
                                          alpha=0.1,
-                                         gamma=0.95,
-                                         inventory_clip=100,
-                                         spread_clip=80,
-                                          inventory_bin=10,
-                                          spread_bin=5,
-                                         inventory_penalty=1.0,
-                                         inventory_limit=100,
-                                         log_orders=log_orders,
-                                         random_state=rstate)
+                                          gamma=0.95,
+                                          inventory_clip=100,
+                                          spread_clip=80,
+                                           inventory_bin=10,
+                                           spread_bin=5,
+                                          inventory_penalty=10.0,
+                                          inventory_limit=100,
+                                          log_orders=log_orders,
+                                          random_state=rstate)
+
+    if args.mm_type == 'rl_tabular_2':
+        mm_wake = '3s'
+        return RLTabularMarketMakerAgentV2(id=agent_id,
+                                           name="RL_TABULAR_MARKET_MAKER_AGENT_V2_{}".format(idx),
+                                           type='RLTabularMarketMakerAgentV2',
+                                           symbol=symbol,
+                                           starting_cash=starting_cash,
+                                           wake_up_freq=mm_wake,
+                                           base_size=args.mm_size,
+                                           base_offsets=[5, 15, 25, 35],
+                                           epsilon=1.0,
+                                           alpha=0.1,
+                                           gamma=0.95,
+                                           inventory_clip=100,
+                                           spread_clip=80,
+                                            inventory_bin=10,
+                                            spread_bin=5,
+                                           inventory_penalty=10.0,
+                                           inventory_limit=100,
+                                           log_orders=log_orders,
+                                           random_state=rstate)
 
     raise ValueError(f"Unknown mm_type {args.mm_type}")
 
@@ -451,33 +392,11 @@ kernelStartTime = historical_date
 kernelStopTime = mkt_close + pd.to_timedelta('00:01:00')
 
 defaultComputationDelay = 50  # 50 nanoseconds
-
-# LATENCY
-
-latency_rstate = np.random.RandomState(seed=np.random.randint(low=0, high=2**32))
-pairwise = (agent_count, agent_count)
-
-# All agents sit on line from Seattle to NYC
-nyc_to_seattle_meters = 3866660
-pairwise_distances = util.generate_uniform_random_pairwise_dist_on_line(0.0, nyc_to_seattle_meters, agent_count,
-                                                                        random_state=latency_rstate)
-pairwise_latencies = util.meters_to_light_ns(pairwise_distances)
-
-model_args = {
-    'connected': True,
-    'min_latency': pairwise_latencies
-}
-
-latency_model = LatencyModel(latency_model='deterministic',
-                             random_state=latency_rstate,
-                             kwargs=model_args
-                             )
 # KERNEL
 
 kernel.runner(agents=agents,
               startTime=kernelStartTime,
               stopTime=kernelStopTime,
-              agentLatencyModel=latency_model,
               defaultComputationDelay=defaultComputationDelay,
               oracle=oracle,
               log_dir=args.log_dir)

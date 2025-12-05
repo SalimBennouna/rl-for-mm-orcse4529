@@ -1,6 +1,6 @@
 import argparse
 import pandas as pd
-from pandas.io.json import json_normalize
+from pandas import json_normalize
 from glob import glob
 import re
 import os
@@ -131,5 +131,4 @@ if __name__ == '__main__':
         plt.show()
         fig.savefig(f'timings-plots/{col}.png', format='png', dpi=300, transparent=False, bbox_inches='tight',
                     pad_inches=0.03)
-
 

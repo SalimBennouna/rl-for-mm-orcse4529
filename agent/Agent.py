@@ -1,4 +1,6 @@
 import pandas as pd
+import sys
+import traceback
 
 from copy import deepcopy
 from util.util import log_print
@@ -112,6 +114,10 @@ class Agent:
 
     if appendSummaryLog: self.kernel.appendSummaryLog(self.id, eventType, e)
 
+  # Used by any subclass to dollarize an int-cents price for printing.
+  def dollarize (self, cents):
+    return dollarize(cents)
+
 
   ### Methods required for communication from other agents.
   ### The kernel will _not_ call these methods on its own behalf,
@@ -183,3 +189,17 @@ class Agent:
     return ("{}".format(self.id) <
             "{}".format(other.id))
 
+
+# Dollarizes int-cents prices for printing.  Defined outside the class for
+# utility access by non-agent classes.
+
+def dollarize(cents):
+  if type(cents) is list:
+    return ( [ dollarize(x) for x in cents ] )
+  elif type(cents) is int:
+    return "${:0.2f}".format(cents / 100)
+  else:
+    # If cents is already a float, there is an error somewhere.
+    print ("ERROR: dollarize(cents) called without int or list of ints: {}".format(cents))
+    traceback.print_stack()
+    sys.exit()
