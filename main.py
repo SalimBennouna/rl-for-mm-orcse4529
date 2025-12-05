@@ -5,7 +5,7 @@ import sys
 if __name__ == '__main__':
 
   # Print system banner.
-  system_name = "ABIDES: Agent-Based Interactive Discrete Event Simulation"
+  system_name = "Agent-Based Interactive Discrete Event Simulation"
 
   print ("=" * len(system_name))
   print (system_name)
@@ -23,9 +23,7 @@ if __name__ == '__main__':
 
   args, config_args = parser.parse_known_args()
 
-  # First parameter supplied is config file.
+  # First parameter supplied is config file module name (now top-level).
   config_file = args.config
 
-  config = importlib.import_module('config.{}'.format(config_file),
-                                   package=None)
-
+  config = importlib.import_module(config_file, package=None)

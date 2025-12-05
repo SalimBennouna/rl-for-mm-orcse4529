@@ -1,9 +1,9 @@
 from agent.Agent import Agent
 from agent.ExchangeAgent import ExchangeAgent
-from message.Message import Message
-from util.order.LimitOrder import LimitOrder
-from util.order.MarketOrder import MarketOrder
-from util.util import log_print
+from Message import Message
+from order.LimitOrder import LimitOrder
+from order.MarketOrder import MarketOrder
+from util import log_print
 
 from copy import deepcopy
 import sys
@@ -56,9 +56,6 @@ class TradingAgent(Agent):
     # automatically generate such requests, though it has a helper function
     # that can be used to make it happen.
     self.last_trade = {}
-
-    # used in subscription mode to record the timestamp for which the data was current in the ExchangeAgent
-    self.exchange_ts = {}
 
     # When a last trade price comes in after market close, the trading agent
     # automatically records it as the daily close price for a symbol.
@@ -167,18 +164,6 @@ class TradingAgent(Agent):
     # the market open and closed times, and is the market not already closed.
     return (self.mkt_open and self.mkt_close) and not self.mkt_closed
 
-  def requestDataSubscription(self, symbol, levels, freq):
-      self.sendMessage(recipientID = self.exchangeID,
-                       msg = Message({"msg": "MARKET_DATA_SUBSCRIPTION_REQUEST",
-                                      "sender": self.id, "symbol": symbol, "levels": levels, "freq": freq}))
-
-  # Used by any Trading Agent subclass to cancel subscription to market data from the Exchange Agent
-  def cancelDataSubscription(self, symbol):
-    self.sendMessage(recipientID=self.exchangeID,
-                     msg=Message({"msg": "MARKET_DATA_SUBSCRIPTION_CANCELLATION",
-                                  "sender": self.id, "symbol": symbol}))
-
-
   def receiveMessage (self, currentTime, msg):
     super().receiveMessage(currentTime, msg)
 
@@ -189,12 +174,12 @@ class TradingAgent(Agent):
     if msg.body['msg'] == "WHEN_MKT_OPEN":
       self.mkt_open = msg.body['data']
 
-      log_print ("Recorded market open: {}", self.kernel.fmtTime(self.mkt_open))
+      log_print ("Recorded market open: {}", self.mkt_open)
 
     elif msg.body['msg'] == "WHEN_MKT_CLOSE":
       self.mkt_close = msg.body['data']
 
-      log_print ("Recorded market close: {}", self.kernel.fmtTime(self.mkt_close))
+      log_print ("Recorded market close: {}", self.mkt_close)
 
     elif msg.body['msg'] == "ORDER_EXECUTED":
       # Call the orderExecuted method, which subclasses should extend.  This parent
@@ -246,9 +231,6 @@ class TradingAgent(Agent):
     elif msg.body['msg'] == 'QUERY_TRANSACTED_VOLUME':
       if msg.body['mkt_closed']: self.mkt_closed = True
       self.query_transacted_volume(msg.body['symbol'], msg.body['transacted_volume'])
-
-    elif msg.body['msg'] == 'MARKET_DATA':
-      self.handleMarketData(msg)
 
     # Now do we know the market hours?
     have_mkt_hours = self.mkt_open is not None and self.mkt_close is not None
@@ -499,17 +481,6 @@ class TradingAgent(Agent):
     self.logEvent("IMBALANCE", [sum([x[1] for x in bids]), sum([x[1] for x in asks])])
 
     self.book = book
-
-  def handleMarketData(self, msg):
-    '''
-    Handles Market Data messages for agents using subscription mechanism
-    '''
-    symbol = msg.body['symbol']
-    self.known_asks[symbol] = msg.body['asks']
-    self.known_bids[symbol] = msg.body['bids']
-    self.last_trade[symbol] = msg.body['last_transaction']
-    self.exchange_ts[symbol] = msg.body['exchange_ts']
-
 
   # Handles QUERY_ORDER_STREAM messages from an exchange agent.
   def queryOrderStream (self, symbol, orders):

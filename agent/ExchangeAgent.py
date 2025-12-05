@@ -5,9 +5,9 @@
 # whether to log all order activity to the agent log, and a random state object (already seeded) to use
 # for stochasticity.
 from agent.Agent import Agent
-from message.Message import Message
-from util.OrderBook import OrderBook
-from util.util import log_print
+from Message import Message
+from OrderBook import OrderBook
+from util import log_print
 
 import datetime as dt
 
@@ -62,12 +62,6 @@ class ExchangeAgent(Agent):
     # Store orderbook in wide format? ONLY WORKS with book_freq == 0
     self.wide_book = wide_book
 
-    # The subscription dict is a dictionary with the key = agent ID,
-    # value = dict (key = symbol, value = list [levels (no of levels to recieve updates for),
-    # frequency (min number of ns between messages), last agent update timestamp]
-    # e.g. {101 : {'AAPL' : [1, 10, pd.Timestamp(10:00:00)}}
-    self.subscription_dict = {}
-
   # The exchange agent overrides this to obtain a reference to an oracle.
   # This is needed to establish a "last trade price" at open (i.e. an opening
   # price) in case agents query last trade before any simulated trades are made.
@@ -119,9 +113,6 @@ class ExchangeAgent(Agent):
     # the atomic time unit in which they are received).  This is separate from, and additional
     # to, any parallel pipeline delay imposed for order book activity.
 
-    # Note that computation delay MUST be updated before any calls to sendMessage.
-    self.setComputationDelay(self.computation_delay)
-
     # Is the exchange closed?  (This block only affects post-close, not pre-open.)
     if currentTime > self.mkt_close:
       # Most messages after close will receive a 'MKT_CLOSED' message in response.  A few things
@@ -149,28 +140,13 @@ class ExchangeAgent(Agent):
     else:
       self.logEvent(msg.body['msg'], msg.body['sender'])
 
-    # Handle the DATA SUBSCRIPTION request and cancellation messages from the agents.
-    if msg.body['msg'] in ["MARKET_DATA_SUBSCRIPTION_REQUEST", "MARKET_DATA_SUBSCRIPTION_CANCELLATION"]:
-      log_print("{} received {} request from agent {}", self.name, msg.body['msg'], msg.body['sender'])
-      self.updateSubscriptionDict(msg, currentTime)
-
     # Handle all message types understood by this exchange.
     if msg.body['msg'] == "WHEN_MKT_OPEN":
       log_print("{} received WHEN_MKT_OPEN request from agent {}", self.name, msg.body['sender'])
 
-      # The exchange is permitted to respond to requests for simple immutable data (like "what are your
-      # hours?") instantly.  This does NOT include anything that queries mutable data, like equity
-      # quotes or trades.
-      self.setComputationDelay(0)
-
       self.sendMessage(msg.body['sender'], Message({"msg": "WHEN_MKT_OPEN", "data": self.mkt_open}))
     elif msg.body['msg'] == "WHEN_MKT_CLOSE":
       log_print("{} received WHEN_MKT_CLOSE request from agent {}", self.name, msg.body['sender'])
-
-      # The exchange is permitted to respond to requests for simple immutable data (like "what are your
-      # hours?") instantly.  This does NOT include anything that queries mutable data, like equity
-      # quotes or trades.
-      self.setComputationDelay(0)
 
       self.sendMessage(msg.body['sender'], Message({"msg": "WHEN_MKT_CLOSE", "data": self.mkt_close}))
     elif msg.body['msg'] == "QUERY_LAST_TRADE":
@@ -243,7 +219,6 @@ class ExchangeAgent(Agent):
       else:
         # Hand the order to the order book for processing.
         self.order_books[order.symbol].handleLimitOrder(deepcopy(order))
-        self.publishOrderBookData()
     elif msg.body['msg'] == "MARKET_ORDER":
       order = msg.body['order']
       log_print("{} received MARKET_ORDER: {}", self.name, order)
@@ -252,7 +227,6 @@ class ExchangeAgent(Agent):
       else:
         # Hand the market order to the order book for processing.
         self.order_books[order.symbol].handleMarketOrder(deepcopy(order))
-        self.publishOrderBookData()
     elif msg.body['msg'] == "CANCEL_ORDER":
       # Note: this is somewhat open to abuse, as in theory agents could cancel other agents' orders.
       # An agent could also become confused if they receive a (partial) execution on an order they
@@ -265,7 +239,6 @@ class ExchangeAgent(Agent):
       else:
         # Hand the order to the order book for processing.
         self.order_books[order.symbol].cancelOrder(deepcopy(order))
-        self.publishOrderBookData()
     elif msg.body['msg'] == 'MODIFY_ORDER':
       # Replace an existing order with a modified order.  There could be some timing issues
       # here.  What if an order is partially executed, but the submitting agent has not
@@ -280,41 +253,6 @@ class ExchangeAgent(Agent):
         log_print("Modification request discarded.  Unknown symbol: {}".format(order.symbol))
       else:
         self.order_books[order.symbol].modifyOrder(deepcopy(order), deepcopy(new_order))
-        self.publishOrderBookData()
-
-  def updateSubscriptionDict(self, msg, currentTime):
-    # The subscription dict is a dictionary with the key = agent ID,
-    # value = dict (key = symbol, value = list [levels (no of levels to recieve updates for),
-    # frequency (min number of ns between messages), last agent update timestamp]
-    # e.g. {101 : {'AAPL' : [1, 10, pd.Timestamp(10:00:00)}}
-    if msg.body['msg'] == "MARKET_DATA_SUBSCRIPTION_REQUEST":
-      agent_id, symbol, levels, freq = msg.body['sender'], msg.body['symbol'], msg.body['levels'], msg.body['freq']
-      self.subscription_dict[agent_id] = {symbol: [levels, freq, currentTime]}
-    elif msg.body['msg'] == "MARKET_DATA_SUBSCRIPTION_CANCELLATION":
-      agent_id, symbol = msg.body['sender'], msg.body['symbol']
-      del self.subscription_dict[agent_id][symbol]
-
-  def publishOrderBookData(self):
-    '''
-    The exchange agents sends an order book update to the agents using the subscription API if one of the following
-    conditions are met:
-    1) agent requests ALL order book updates (freq == 0)
-    2) order book update timestamp > last time agent was updated AND the orderbook update time stamp is greater than
-    the last agent update time stamp by a period more than that specified in the freq parameter.
-    '''
-    for agent_id, params in self.subscription_dict.items():
-      for symbol, values in params.items():
-        levels, freq, last_agent_update = values[0], values[1], values[2]
-        orderbook_last_update = self.order_books[symbol].last_update_ts
-        if (freq == 0) or \
-           ((orderbook_last_update > last_agent_update) and ((orderbook_last_update - last_agent_update).delta >= freq)):
-          self.sendMessage(agent_id, Message({"msg": "MARKET_DATA",
-                                              "symbol": symbol,
-                                              "bids": self.order_books[symbol].getInsideBids(levels),
-                                              "asks": self.order_books[symbol].getInsideAsks(levels),
-                                              "last_transaction": self.order_books[symbol].last_trade,
-                                              "exchange_ts": self.currentTime}))
-          self.subscription_dict[agent_id][symbol][2] = orderbook_last_update
 
   def logOrderBookSnapshots(self, symbol):
     """

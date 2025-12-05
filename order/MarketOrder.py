@@ -1,4 +1,4 @@
-from util.order.Order import Order
+from order.Order import Order
 from Kernel import Kernel
 from agent.Agent import dollarize
 from copy import deepcopy
@@ -16,7 +16,7 @@ class MarketOrder(Order):
     def __str__(self):
         if silent_mode: return ''
 
-        return "(Agent {} @ {}) : MKT Order {} {} {}".format(self.agent_id, Kernel.fmtTime(self.time_placed),
+        return "(Agent {} @ {}) : MKT Order {} {} {}".format(self.agent_id, self.time_placed,
                                                              "BUY" if self.is_buy_order else "SELL",
                                                              self.quantity, self.symbol)
 

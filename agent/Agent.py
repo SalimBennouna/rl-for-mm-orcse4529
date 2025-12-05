@@ -3,7 +3,7 @@ import sys
 import traceback
 
 from copy import deepcopy
-from util.util import log_print
+from util import log_print
 
 class Agent:
 
@@ -74,7 +74,7 @@ class Agent:
     # Subclass agents may override this behavior as needed.
 
     log_print ("Agent {} ({}) requesting kernel wakeup at time {}",
-           self.id, self.name, self.kernel.fmtTime(startTime))
+           self.id, self.name, startTime)
 
     self.setWakeup(startTime)
 
@@ -128,12 +128,12 @@ class Agent:
     # the front of the kernel's priority queue.  currentTime is
     # the simulation time at which the kernel is delivering this
     # message -- the agent should treat this as "now".  msg is
-    # an object guaranteed to inherit from the message.Message class.
+    # an object guaranteed to inherit from the Message class.
 
     self.currentTime = currentTime
 
     log_print ("At {}, agent {} ({}) received: {}",
-                  self.kernel.fmtTime(currentTime), self.id, self.name, msg)
+                  currentTime, self.id, self.name, msg)
 
 
   def wakeup (self, currentTime):
@@ -144,7 +144,7 @@ class Agent:
     self.currentTime = currentTime
 
     log_print ("At {}, agent {} ({}) received wakeup.",
-                  self.kernel.fmtTime(currentTime), self.id, self.name)
+                  currentTime, self.id, self.name)
 
 
   ### Methods used to request services from the Kernel.  These should be used
@@ -158,15 +158,6 @@ class Agent:
 
   def setWakeup (self, requestedTime):
     self.kernel.setWakeup(self.id, requestedTime)
-
-  def getComputationDelay (self):
-    return self.kernel.getAgentComputeDelay(sender = self.id)
-
-  def setComputationDelay (self, requestedDelay):
-    self.kernel.setAgentComputeDelay(sender = self.id, requestedDelay = requestedDelay)
-
-  def delay (self, additionalDelay):
-    self.kernel.delayAgent(sender = self.id, additionalDelay = additionalDelay)
 
   def writeLog (self, dfLog, filename=None):
     self.kernel.writeLog(self.id, dfLog, filename)

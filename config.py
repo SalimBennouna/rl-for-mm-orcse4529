@@ -15,9 +15,9 @@ import datetime as dt
 from dateutil.parser import parse
 
 from Kernel import Kernel
-from util import util
-from util.order import LimitOrder
-from util.oracle.SparseMeanRevertingOracle import SparseMeanRevertingOracle
+import util
+from order import LimitOrder
+from SparseMeanRevertingOracle import SparseMeanRevertingOracle
 
 from agent.ExchangeAgent import ExchangeAgent
 from agent.NoiseAgent import NoiseAgent
@@ -235,7 +235,6 @@ def build_market_maker(idx, agent_id):
                                 min_size=args.mm_size,
                                 max_size=args.mm_size,
                                 wake_up_freq=mm_wake,
-                                subscribe=False,
                                 inventory_limit=100,
                                 log_orders=log_orders,
                                 random_state=rstate)

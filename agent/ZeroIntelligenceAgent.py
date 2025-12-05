@@ -1,5 +1,5 @@
 from agent.TradingAgent import TradingAgent
-from util.util import log_print
+from util import log_print
 
 from math import sqrt
 import numpy as np

@@ -3,9 +3,9 @@
 # List of ask prices (index zero is best ask), each with a list of LimitOrders.
 import sys
 
-from message.Message import Message
-from util.order.LimitOrder import LimitOrder
-from util.util import log_print, be_silent
+from Message import Message
+from order.LimitOrder import LimitOrder
+from util import log_print, be_silent
 
 from copy import deepcopy
 import pandas as pd

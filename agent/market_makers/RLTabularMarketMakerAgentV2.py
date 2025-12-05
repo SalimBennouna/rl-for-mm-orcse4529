@@ -1,7 +1,7 @@
 from agent.TradingAgent import TradingAgent
 import pandas as pd
 import numpy as np
-from util.util import log_print
+from util import log_print
 
 
 class RLTabularMarketMakerAgentV2(TradingAgent):

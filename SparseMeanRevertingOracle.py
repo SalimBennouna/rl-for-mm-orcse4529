@@ -19,18 +19,16 @@
 ### agents each acting at realistic "retail" intervals, on the order of seconds
 ### or minutes, spread out across the day.
 
-from util.oracle.MeanRevertingOracle import MeanRevertingOracle
-
 import datetime as dt
 import numpy as np
 import pandas as pd
 import os, random, sys
 
 from math import exp, sqrt
-from util.util import log_print
+from util import log_print
 
 
-class SparseMeanRevertingOracle(MeanRevertingOracle):
+class SparseMeanRevertingOracle:
 
   def __init__(self, mkt_open, mkt_close, symbols):
     # Symbols must be a dictionary of dictionaries with outer keys as symbol names and
@@ -181,9 +179,6 @@ class SparseMeanRevertingOracle(MeanRevertingOracle):
     return (v)
 
 
-  # Return the daily open price for the symbol given.  In the case of the MeanRevertingOracle,
-  # this will simply be the first fundamental value, which is also the fundamental mean.
-  # We will use the mkt_open time as given, however, even if it disagrees with this.
   def getDailyOpenPrice (self, symbol, mkt_open=None):
   
     # The sparse oracle doesn't maintain full fundamental value history, but rather

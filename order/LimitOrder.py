@@ -1,7 +1,7 @@
 # LimitOrder class, inherits from Order class, adds a limit price.  These are the
 # Orders that typically go in an Exchange's OrderBook.
 
-from util.order.Order import Order
+from order.Order import Order
 from Kernel import Kernel
 from agent.Agent import dollarize
 from copy import deepcopy
@@ -31,7 +31,7 @@ class LimitOrder(Order):
         # Until we make explicit market orders, we make a few assumptions that EXTREME prices on limit
         # orders are trying to represent a market order.  This only affects printing - they still hit
         # the order book like limit orders, which is wrong.
-        return "(Agent {} @ {}{}) : {} {} {} @ {}{}".format(self.agent_id, Kernel.fmtTime(self.time_placed),
+        return "(Agent {} @ {}{}) : {} {} {} @ {}{}".format(self.agent_id, self.time_placed,
                                                             f" [{self.tag}]" if self.tag is not None else "",
                                                             "BUY" if self.is_buy_order else "SELL", self.quantity,
                                                             self.symbol,

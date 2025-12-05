@@ -1,6 +1,6 @@
 from agent.TradingAgent import TradingAgent
 import pandas as pd
-from util.util import log_print
+from util import log_print
 
 
 DEFAULT_LEVELS_QUOTE_DICT = {1: [1, 0, 0, 0, 0],
@@ -26,8 +26,7 @@ class MarketMakerAgent(TradingAgent):
     """
 
     def __init__(self, id, name, type, symbol, starting_cash, min_size, max_size , wake_up_freq='1s',
-                 subscribe=False, subscribe_freq=10e9, subscribe_num_levels=1, log_orders=False, random_state=None,
-                 inventory_limit=100):
+                 log_orders=False, random_state=None, inventory_limit=100):
 
         super().__init__(id, name, type, starting_cash=starting_cash, log_orders=log_orders, random_state=random_state)
         self.symbol = symbol      # Symbol traded
@@ -35,11 +34,7 @@ class MarketMakerAgent(TradingAgent):
         self.max_size = max_size  # Maximum order size
         self.size = self.min_size  # fixed order size per LOB side
         self.wake_up_freq = wake_up_freq  # Frequency of agent wake up
-        self.subscribe = subscribe  # Flag to determine whether to subscribe to data or use polling mechanism
-        self.subscribe_freq = subscribe_freq  # Frequency in nanoseconds^-1 at which to receive market updates
-                                              # in subscribe mode
-        self.subscribe_num_levels = subscribe_num_levels  # Number of orderbook levels in subscription mode
-        self.subscription_requested = False
+        self.subscribe_num_levels = 1
         self.log_orders = log_orders
         self.state = "AWAITING_WAKEUP"
         # Percentage of the order size to be placed at different levels is determined by levels_quote_dict
@@ -55,18 +50,14 @@ class MarketMakerAgent(TradingAgent):
     def wakeup(self, currentTime):
         """ Agent wakeup is determined by self.wake_up_freq """
         can_trade = super().wakeup(currentTime)
-        if self.subscribe and not self.subscription_requested:
-            super().requestDataSubscription(self.symbol, levels=self.subscribe_num_levels, freq=self.subscribe_freq)
-            self.subscription_requested = True
-            self.state = 'AWAITING_MARKET_DATA'
-        elif can_trade and not self.subscribe:
+        if can_trade:
             self.getCurrentSpread(self.symbol, depth=self.subscribe_num_levels)
             self.state = 'AWAITING_SPREAD'
 
     def receiveMessage(self, currentTime, msg):
         """ Market Maker actions are determined after obtaining the bids and asks in the LOB """
         super().receiveMessage(currentTime, msg)
-        if not self.subscribe and self.state == 'AWAITING_SPREAD' and msg.body['msg'] == 'QUERY_SPREAD':
+        if self.state == 'AWAITING_SPREAD' and msg.body['msg'] == 'QUERY_SPREAD':
             mid = self.last_trade[self.symbol] if self.last_trade[self.symbol] is not None else None
 
             self.num_levels = 1   # Number of price levels to place the trades in
@@ -97,14 +88,6 @@ class MarketMakerAgent(TradingAgent):
 
             self.setWakeup(currentTime + self.getWakeFrequency())
             self.state = 'AWAITING_WAKEUP'
-
-        elif self.subscribe and self.state == 'AWAITING_MARKET_DATA' and msg.body['msg'] == 'MARKET_DATA':
-            self.cancelOrders()
-            num_levels_place = len(self.levels_quote_dict.keys())
-            self.num_levels = self.random_state.randint(1, num_levels_place)  # Number of price levels to place the trades in
-            self.size_split = self.levels_quote_dict.get(self.num_levels)  # % of the order size to be placed at different levels
-            self.placeOrders(self.known_bids[self.symbol], self.known_asks[self.symbol])
-            self.state = 'AWAITING_MARKET_DATA'
 
     def placeOrders(self, bids, asks):
         if bids and asks:

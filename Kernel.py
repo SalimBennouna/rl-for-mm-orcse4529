@@ -2,9 +2,9 @@ import numpy as np
 import pandas as pd
 
 import os, queue, sys
-from message.Message import MessageType
+from Message import MessageType
 
-from util.util import log_print
+from util import log_print
 
 
 class Kernel:
@@ -83,32 +83,10 @@ class Kernel:
     else:
       self.log_dir = str(int(self.kernelWallClockStart.timestamp()))
 
-    # The kernel maintains a current time for each agent to allow
-    # simulation of per-agent computation delays.  The agent's time
-    # is pushed forward (see below) each time it awakens, and it
-    # cannot receive new messages/wakeups until the global time
-    # reaches the agent's time.  (i.e. it cannot act again while
-    # it is still "in the future")
-
+    # The kernel maintains a current time for each agent.
     # This also nicely enforces agents being unable to act before
     # the simulation startTime.
     self.agentCurrentTimes = [self.startTime] * len(agents)
-
-    # agentComputationDelays is in nanoseconds, starts with a default
-    # value from config, and can be changed by any agent at any time
-    # (for itself only).  It represents the time penalty applied to
-    # an agent each time it is awakened  (wakeup or recvMsg).  The
-    # penalty applies _after_ the agent acts, before it may act again.
-    # TODO: this might someday change to pd.Timedelta objects.
-    self.agentComputationDelays = [defaultComputationDelay] * len(agents)
-
-    # The kernel maintains an accumulating additional delay parameter
-    # for the current agent.  This is applied to each message sent
-    # and upon return from wakeup/receiveMessage, in addition to the
-    # agent's standard computation delay.  However, it never carries
-    # over to future wakeup/receiveMessage calls.  It is useful for
-    # staggering of sent messages.
-    self.currentAgentAdditionalDelay = 0
 
     log_print ("Kernel started: {}", self.name)
     log_print ("Simulation started!")
@@ -171,16 +149,15 @@ class Kernel:
         # Periodically print the simulation time and total messages, even if muted.
         if ttl_messages % 100000 == 0:
           print ("\n--- Simulation time: {}, messages processed: {}, wallclock elapsed: {} ---\n".format(
-                         self.fmtTime(self.currentTime), ttl_messages, pd.Timestamp('now') - eventQueueWallClockStart))
+                         self.currentTime, ttl_messages, pd.Timestamp('now') - eventQueueWallClockStart))
 
         log_print ("\n--- Kernel Event Queue pop ---")
         log_print ("Kernel handling {} message for agent {} at time {}", 
-                   msg_type, msg_recipient, self.fmtTime(self.currentTime))
+                   msg_type, msg_recipient, self.currentTime)
 
         ttl_messages += 1
 
-        # In between messages, always reset the currentAgentAdditionalDelay.
-        self.currentAgentAdditionalDelay = 0
+        # In simplified mode, no per-agent additional delay tracking.
 
         # Dispatch message to agent.
         if msg_type == MessageType.WAKEUP:
@@ -188,58 +165,18 @@ class Kernel:
           # Who requested this wakeup call?
           agent = msg_recipient
 
-          # Test to see if the agent is already in the future.  If so,
-          # delay the wakeup until the agent can act again.
-          if self.agentCurrentTimes[agent] > self.currentTime:
-            # Push the wakeup call back into the PQ with a new time.
-            self.messages.put((self.agentCurrentTimes[agent],
-                              (msg_recipient, msg_type, msg)))
-            log_print ("Agent in future: wakeup requeued for {}",
-                       self.fmtTime(self.agentCurrentTimes[agent]))
-            continue
-            
-          # Set agent's current time to global current time for start
-          # of processing.
-          self.agentCurrentTimes[agent] = self.currentTime
-
           # Wake the agent.
           agents[agent].wakeup(self.currentTime)
 
-          # Delay the agent by its computation delay plus any transient additional delay requested.
-          self.agentCurrentTimes[agent] += pd.Timedelta(self.agentComputationDelays[agent] +
-                                                        self.currentAgentAdditionalDelay)
-
-          log_print ("After wakeup return, agent {} delayed from {} to {}",
-                     agent, self.fmtTime(self.currentTime), self.fmtTime(self.agentCurrentTimes[agent]))
+          # No computation/latency delay applied in simplified mode.
 
         elif msg_type == MessageType.MESSAGE:
 
           # Who is receiving this message?
           agent = msg_recipient
 
-          # Test to see if the agent is already in the future.  If so,
-          # delay the message until the agent can act again.
-          if self.agentCurrentTimes[agent] > self.currentTime:
-            # Push the message back into the PQ with a new time.
-            self.messages.put((self.agentCurrentTimes[agent],
-                              (msg_recipient, msg_type, msg)))
-            log_print ("Agent in future: message requeued for {}",
-                       self.fmtTime(self.agentCurrentTimes[agent]))
-            continue
-
-          # Set agent's current time to global current time for start
-          # of processing.
-          self.agentCurrentTimes[agent] = self.currentTime
-
           # Deliver the message.
           agents[agent].receiveMessage(self.currentTime, msg)
-
-          # Delay the agent by its computation delay plus any transient additional delay requested.
-          self.agentCurrentTimes[agent] += pd.Timedelta(self.agentComputationDelays[agent] +
-                                                        self.currentAgentAdditionalDelay)
-
-          log_print ("After receiveMessage return, agent {} delayed from {} to {}",
-                     agent, self.fmtTime(self.currentTime), self.fmtTime(self.agentCurrentTimes[agent]))
 
         else:
           raise ValueError("Unknown message type found in queue",
@@ -279,34 +216,16 @@ class Kernel:
       log_print ("Ending sim {}", sim)
 
 
-    # The Kernel adds a handful of custom state results for all simulations,
-    # which configurations may use, print, log, or discard.
-    self.custom_state['kernel_event_queue_elapsed_wallclock'] = eventQueueWallClockElapsed
-    self.custom_state['kernel_slowest_agent_finish_time'] = max(self.agentCurrentTimes)
-
-    # Agents will request the Kernel to serialize their agent logs, usually
-    # during kernelTerminating, but the Kernel must write out the summary
-    # log itself.
-    self.writeSummaryLog()
-
-    # This should perhaps be elsewhere, as it is explicitly financial, but it
-    # is convenient to have a quick summary of the results for now.
-    print ("Mean ending value by agent type:")
-    for a in self.meanResultByAgentType:
-      value = self.meanResultByAgentType[a]
-      count = self.agentCountByType[a]
-      print ("{}: {:d}".format(a, int(round(value / count))))
-
+    # Simplified kernel returns no custom state or summary logging.
     print ("Simulation ending!")
-
-    return self.custom_state
+    return {}
 
 
   def sendMessage(self, sender = None, recipient = None, msg = None, delay = 0):
     # Called by an agent to send a message to another agent.  The kernel
     # supplies its own currentTime (i.e. "now") to prevent possible
     # abuse by agents.  The kernel will handle computational delay penalties
-    # and/or network latency.  The message must derive from the message.Message class.
+    # and/or network latency.  The message must derive from the Message class.
     # The optional delay parameter represents an agent's request for ADDITIONAL
     # delay (beyond the Kernel's mandatory computation + latency delays) to represent
     # parallel pipeline processing delays (that should delay the transmission of messages
@@ -327,114 +246,33 @@ class Kernel:
                        "sender:", sender, "recipient:", recipient,
                        "msg:", msg)
 
-    # Apply the agent's current computation delay to effectively "send" the message
-    # at the END of the agent's current computation period when it is done "thinking".
-    # NOTE: sending multiple messages on a single wake will transmit all at the same
-    # time, at the end of computation.  To avoid this, use Agent.delay() to accumulate
-    # a temporary delay (current cycle only) that will also stagger messages.
-
-    # The optional pipeline delay parameter DOES push the send time forward, since it
-    # represents "thinking" time before the message would be sent.  We don't use this
-    # for much yet, but it could be important later.
-
-    # This means message delay (before latency) is the agent's standard computation delay
-    # PLUS any accumulated delay for this wake cycle PLUS any one-time requested delay
-    # for this specific message only.
-    sentTime = self.currentTime + pd.Timedelta(self.agentComputationDelays[sender] + 
-                                               self.currentAgentAdditionalDelay + delay)
-
-    # Deliver messages immediately after computation (no network latency).
-    latency = 1  # nanoseconds
-    deliverAt = sentTime + pd.Timedelta(latency)
-    log_print ("Kernel applied latency {}, accumulated delay {}, one-time delay {} on sendMessage from: {} to {}, scheduled for {}",
-               latency, self.currentAgentAdditionalDelay, delay, self.agents[sender].name, self.agents[recipient].name,
-               self.fmtTime(deliverAt))
-
-    # Finally drop the message in the queue with priority == delivery time.
+    # Enqueue the message immediately at current kernel time.
+    deliverAt = self.currentTime
     self.messages.put((deliverAt, (recipient, MessageType.MESSAGE, msg)))
-
-    log_print ("Sent time: {}, current time {}, computation delay {}", sentTime, self.currentTime, self.agentComputationDelays[sender])
-    log_print ("Message queued: {}", msg)
 
 
 
   def setWakeup(self, sender = None, requestedTime = None):
-    # Called by an agent to receive a "wakeup call" from the kernel
-    # at some requested future time.  Defaults to the next possible
-    # timestamp.  Wakeup time cannot be the current time or a past time.
-    # Sender is required and should be the ID of the agent making the call.
-    # The agent is responsible for maintaining any required state; the
-    # kernel will not supply any parameters to the wakeup() call.
-
+    # Schedule a wakeup call for the agent at requestedTime (defaults to now).
     if requestedTime is None:
-        requestedTime = self.currentTime + pd.TimeDelta(1)
+        requestedTime = self.currentTime
 
     if sender is None:
       raise ValueError("setWakeup() called without valid sender ID",
                        "sender:", sender, "requestedTime:", requestedTime)
 
-    if self.currentTime and (requestedTime < self.currentTime):
-      raise ValueError("setWakeup() called with requested time not in future",
-                       "currentTime:", self.currentTime,
-                       "requestedTime:", requestedTime)
-
-    log_print ("Kernel adding wakeup for agent {} at time {}",
-               sender, self.fmtTime(requestedTime))
-
     self.messages.put((requestedTime,
                       (sender, MessageType.WAKEUP, None)))
 
+  # No-op stubs to satisfy agents that still set or query compute delays.
+  def getAgentComputeDelay(self, sender=None):
+    return 0
 
-  def getAgentComputeDelay(self, sender = None):
-    # Allows an agent to query its current computation delay.
-    return self.agentComputationDelays[sender]
+  def setAgentComputeDelay(self, sender=None, requestedDelay=None):
+    return
 
-
-  def setAgentComputeDelay(self, sender = None, requestedDelay = None):
-    # Called by an agent to update its computation delay.  This does
-    # not initiate a global delay, nor an immediate delay for the
-    # agent.  Rather it sets the new default delay for the calling
-    # agent.  The delay will be applied upon every return from wakeup
-    # or recvMsg.  Note that this delay IS applied to any messages
-    # sent by the agent during the current wake cycle (simulating the
-    # messages popping out at the end of its "thinking" time).
-
-    # Also note that we DO permit a computation delay of zero, but this should
-    # really only be used for special or massively parallel agents.
-
-    # requestedDelay should be in whole nanoseconds.
-    if not type(requestedDelay) is int:
-      raise ValueError("Requested computation delay must be whole nanoseconds.",
-                       "requestedDelay:", requestedDelay)
-
-    # requestedDelay must be non-negative.
-    if not requestedDelay >= 0:
-      raise ValueError("Requested computation delay must be non-negative nanoseconds.",
-                       "requestedDelay:", requestedDelay)
-
-    self.agentComputationDelays[sender] = requestedDelay
-
-
-
-  def delayAgent(self, sender = None, additionalDelay = None):
-    # Called by an agent to accumulate temporary delay for the current wake cycle.
-    # This will apply the total delay (at time of sendMessage) to each message,
-    # and will modify the agent's next available time slot.  These happen on top
-    # of the agent's compute delay BUT DO NOT ALTER IT.  (i.e. effects are transient)
-    # Mostly useful for staggering outbound messages.
-
-    # additionalDelay should be in whole nanoseconds.
-    if not type(additionalDelay) is int:
-      raise ValueError("Additional delay must be whole nanoseconds.",
-                       "additionalDelay:", additionalDelay)
-
-    # additionalDelay must be non-negative.
-    if not additionalDelay >= 0:
-      raise ValueError("Additional delay must be non-negative nanoseconds.",
-                       "additionalDelay:", additionalDelay)
-
-    self.currentAgentAdditionalDelay += additionalDelay
-
+  def delayAgent(self, sender=None, additionalDelay=None):
+    return
 
 
   def findAgentByType(self, type = None):
@@ -512,21 +350,3 @@ class Kernel:
     self.custom_state['agent_state'][agent_id] = state
 
  
-  @staticmethod
-  def fmtTime(simulationTime):
-    # The Kernel class knows how to pretty-print time.  It is assumed simulationTime
-    # is in nanoseconds since midnight.  Note this is a static method which can be
-    # called either on the class or an instance.
-
-    # Try just returning the pd.Timestamp now.
-    return (simulationTime)
-
-    ns = simulationTime
-    hr = int(ns / (1000000000 * 60 * 60))
-    ns -= (hr * 1000000000 * 60 * 60)
-    m = int(ns / (1000000000 * 60))
-    ns -= (m * 1000000000 * 60)
-    s = int(ns / 1000000000)
-    ns = int(ns - (s * 1000000000))
-
-    return "{:02d}:{:02d}:{:02d}.{:09d}".format(hr, m, s, ns)
