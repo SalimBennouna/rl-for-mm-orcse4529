@@ -7,9 +7,9 @@ class RLMM1(BaseTrader):
     """
     Minimal tabular Q-learning market maker.
 
-    - State: binned inventory and spread.
+    - State: binned spread only.
     - Action: choose a single tick offset from the mid for bid/ask quotes (symmetric), or no-quote.
-    - Reward: incremental PnL minus an optional inventory penalty.
+    - Reward: incremental mark-to-market PnL (no inventory penalty).
 
     This is intentionally simple for baseline benchmarking. It does on-policy learning inside the
     simulation (no replay).
@@ -97,11 +97,11 @@ class RLMM1(BaseTrader):
             else:
                 mid = (bid + ask) / 2
                 spread = ask - bid
-            state = self._discretize_state(spread, self.getHoldings(self.symbol))
+            state = self._discretize_state(spread)
 
             # reward from last action
             pnl = self._mark_to_market(mid)
-            reward = pnl - self.last_pnl - self.inventory_penalty * (self.getHoldings(self.symbol) ** 2)
+            reward = pnl - self.last_pnl
             self.last_pnl = pnl
             self.cum_reward += reward
 
@@ -128,12 +128,10 @@ class RLMM1(BaseTrader):
         if self.getHoldings(self.symbol) > -self.inventory_limit:
             self.placeLimitOrder(self.symbol, self.base_size, False, ask_price)
 
-    def _discretize_state(self, spread, inventory):
-        inv = int(np.clip(inventory, -self.inventory_clip, self.inventory_clip))
+    def _discretize_state(self, spread):
         spr = int(np.clip(spread, 0, self.spread_clip))
-        inv_bin = inv // self.inventory_bin
         spr_bin = spr // self.spread_bin
-        return (inv_bin, spr_bin)
+        return spr_bin
 
     def _choose_action(self, state):
         self.step_count += 1
@@ -161,7 +159,7 @@ class RLMM1(BaseTrader):
         return self.holdings['CASH'] + self.getHoldings(self.symbol) * mid
 
     def _log_state(self, currentTime, mid, spread, state, action_idx, greedy_idx, reward):
-        inv_bin, spr_bin = state
+        spr_bin = state
         qs = [self.q.get((state, a), 0.0) for a in range(len(self.offsets))]
         self.logEvent('STATE', {
             'time': currentTime,
@@ -172,7 +170,7 @@ class RLMM1(BaseTrader):
             'mtm': self._mark_to_market(mid),
             'last_action': action_idx,
             'greedy_action': greedy_idx,
-            'inventory_bin': inv_bin,
+            'inventory_bin': None,
             'spread_bin': spr_bin,
             'reward': reward,
             'cum_reward': self.cum_reward,
