@@ -1,7 +1,7 @@
 import sys
 
 from Message import Message
-from order.LimitOrder import LimitOrder
+from Order import LimitOrder
 
 from copy import deepcopy
 import pandas as pd

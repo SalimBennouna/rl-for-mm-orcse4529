@@ -1,9 +1,9 @@
-from agent.TradingAgent import TradingAgent
+from traders.BaseTrader import BaseTrader
 import pandas as pd
 import numpy as np
 
 
-class RLMarketMakerAgent(TradingAgent):
+class RLMM2(BaseTrader):
     """
     Minimal tabular Q-learning market maker.
 
@@ -27,6 +27,7 @@ class RLMarketMakerAgent(TradingAgent):
                  inventory_bin=100,
                  spread_bin=1,
                  inventory_penalty=0.0,
+                 inventory_limit=100,
                  epsilon_half_life_hours=5,
                  log_orders=False,
                  random_state=None):
@@ -44,6 +45,7 @@ class RLMarketMakerAgent(TradingAgent):
         self.inventory_bin = inventory_bin
         self.spread_bin = spread_bin
         self.inventory_penalty = inventory_penalty
+        self.inventory_limit = inventory_limit
         self.state = 'AWAITING_WAKEUP'
         self.step_count = 0
         # decay steps based on wake_up_freq and half-life
@@ -78,11 +80,23 @@ class RLMarketMakerAgent(TradingAgent):
         if self.state == 'AWAITING_SPREAD' and msg.body['msg'] == 'QUERY_SPREAD':
             bid, _, ask, _ = self.getKnownBidAsk(self.symbol)
             if not (bid and ask):
-                self.setWakeup(currentTime + self.getWakeFrequency())
-                return
-
-            mid = (bid + ask) / 2
-            spread = ask - bid
+                # Fall back to the latest known trade (or single-sided quote) so we can seed the book
+                last = self.last_trade.get(self.symbol)
+                if last is not None:
+                    mid = last
+                    spread = 0
+                elif bid is not None:
+                    mid = bid
+                    spread = 0
+                elif ask is not None:
+                    mid = ask
+                    spread = 0
+                else:
+                    self.setWakeup(currentTime + self.getWakeFrequency())
+                    return
+            else:
+                mid = (bid + ask) / 2
+                spread = ask - bid
             state = self._discretize_state(spread, self.getHoldings(self.symbol))
 
             # reward from last action
@@ -99,7 +113,7 @@ class RLMarketMakerAgent(TradingAgent):
             self._place_quotes(mid, self.offsets[action_idx])
 
             # Log state for downstream analysis
-            self._log_state(currentTime, mid, state, action_idx, greedy_idx, reward)
+            self._log_state(currentTime, mid, spread, state, action_idx, greedy_idx, reward)
 
             self.last_state = state
             self.last_action = action_idx
@@ -109,8 +123,10 @@ class RLMarketMakerAgent(TradingAgent):
     def _place_quotes(self, mid, offset):
         bid_price = int(mid - offset)
         ask_price = int(mid + offset)
-        self.placeLimitOrder(self.symbol, self.base_size, True, bid_price)
-        self.placeLimitOrder(self.symbol, self.base_size, False, ask_price)
+        if self.getHoldings(self.symbol) < self.inventory_limit:
+            self.placeLimitOrder(self.symbol, self.base_size, True, bid_price)
+        if self.getHoldings(self.symbol) > -self.inventory_limit:
+            self.placeLimitOrder(self.symbol, self.base_size, False, ask_price)
 
     def _discretize_state(self, spread, inventory):
         inv = int(np.clip(inventory, -self.inventory_clip, self.inventory_clip))
@@ -144,12 +160,13 @@ class RLMarketMakerAgent(TradingAgent):
             mid = self.last_trade.get(self.symbol, 0) or 0
         return self.holdings['CASH'] + self.getHoldings(self.symbol) * mid
 
-    def _log_state(self, currentTime, mid, state, action_idx, greedy_idx, reward):
+    def _log_state(self, currentTime, mid, spread, state, action_idx, greedy_idx, reward):
         inv_bin, spr_bin = state
         qs = [self.q.get((state, a), 0.0) for a in range(len(self.offsets))]
         self.logEvent('STATE', {
             'time': currentTime,
             'mid': mid,
+            'spread': spread,
             'inventory': self.getHoldings(self.symbol),
             'cash': self.holdings['CASH'],
             'mtm': self._mark_to_market(mid),
