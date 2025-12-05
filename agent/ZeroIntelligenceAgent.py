@@ -1,5 +1,4 @@
 from agent.TradingAgent import TradingAgent
-from util import log_print
 
 from math import sqrt
 import numpy as np
@@ -66,7 +65,7 @@ class ZeroIntelligenceAgent(TradingAgent):
         H = int(round(self.getHoldings(self.symbol), -2) / 100)
         # May request real fundamental value from oracle as part of final cleanup/stats.
         if self.symbol != 'ETF':
-            rT = self.oracle.observePrice(self.symbol, self.currentTime, sigma_n=0, random_state=self.random_state)
+            rT = self.oracle.emit_view(self.symbol, self.currentTime, sigma_n=0, random_state=self.random_state)
         else:
             portfolio_rT, rT = self.oracle.observePortfolioPrice(self.symbol, self.portfolio, self.currentTime,
                                                                  sigma_n=0,
@@ -84,21 +83,16 @@ class ZeroIntelligenceAgent(TradingAgent):
         else:
             surplus = 0
 
-        log_print("surplus init: {}", surplus)
 
         # Add final (real) fundamental value times shares held.
         surplus += rT * H
 
-        log_print("surplus after holdings: {}", surplus)
 
         # Add ending cash value and subtract starting cash value.
         surplus += self.holdings['CASH'] - self.starting_cash
 
         self.logEvent('FINAL_VALUATION', surplus, True)
 
-        log_print(
-            "{} final report.  Holdings {}, end cash {}, start cash {}, final fundamental {}, preferences {}, surplus {}",
-            self.name, H, self.holdings['CASH'], self.starting_cash, rT, self.theta, surplus)
 
     def wakeup(self, currentTime):
         # Parent class handles discovery of exchange times and market_open wakeup call.
@@ -114,7 +108,6 @@ class ZeroIntelligenceAgent(TradingAgent):
                 self.trading = True
 
                 # Time to start trading!
-                log_print("{} is ready to start trading now.", self.name)
 
         # Steady state wakeup behavior starts here.
 
@@ -171,23 +164,19 @@ class ZeroIntelligenceAgent(TradingAgent):
 
         # The agent obtains a new noisy observation of the current fundamental value
         # and uses this to update its internal estimates in a Bayesian manner.
-        obs_t = self.oracle.observePrice(self.symbol, self.currentTime, sigma_n=self.sigma_n,
+        obs_t = self.oracle.emit_view(self.symbol, self.currentTime, sigma_n=self.sigma_n,
                                          random_state=self.random_state)
 
-        log_print("{} observed {} at {}", self.name, obs_t, self.currentTime)
 
         # Flip a coin to decide if we will buy or sell a unit at this time.
         q = int(self.getHoldings(self.symbol) / 100) # q now represents an index to how many 100 lots are held
 
         if q >= self.q_max:
             buy = False
-            log_print("Long holdings limit: agent will SELL")
         elif q <= -self.q_max:
             buy = True
-            log_print("Short holdings limit: agent will BUY")
         else:
             buy = bool(self.random_state.randint(0, 2))
-            log_print("Coin flip: agent will {}", "BUY" if buy else "SELL")
 
         # Update internal estimates of the current fundamental value and our error of same.
 
@@ -238,14 +227,12 @@ class ZeroIntelligenceAgent(TradingAgent):
         # time as the previous wake time.
         self.prev_wake_time = self.currentTime
 
-        log_print("{} estimates r_T = {} as of {}", self.name, r_T, self.currentTime)
 
         # Determine the agent's total valuation.
         q += (self.q_max - 1)
         theta = self.theta[q + 1 if buy else q]
         v = r_T + theta
 
-        log_print("{} total unit valuation is {} (theta = {})", self.name, v, theta)
 
         # Return values needed to implement strategy and select limit price.
         return v, buy
@@ -268,17 +255,11 @@ class ZeroIntelligenceAgent(TradingAgent):
         if buy and ask_vol > 0:
             R_ask = v - ask
             if R_ask >= (self.eta * R):
-                log_print("{} desired R = {}, but took R = {} at ask = {} due to eta", self.name, R, R_ask, ask)
                 p = ask
-            else:
-                log_print("{} demands R = {}, limit price {}", self.name, R, p)
         elif (not buy) and bid_vol > 0:
             R_bid = bid - v
             if R_bid >= (self.eta * R):
-                log_print("{} desired R = {}, but took R = {} at bid = {} due to eta", self.name, R, R_bid, bid)
                 p = bid
-            else:
-                log_print("{} demands R = {}, limit price {}", self.name, R, p)
 
         # Place the order.
         size = 100

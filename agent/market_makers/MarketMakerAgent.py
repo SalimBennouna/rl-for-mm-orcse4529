@@ -1,6 +1,5 @@
 from agent.TradingAgent import TradingAgent
 import pandas as pd
-from util import log_print
 
 
 DEFAULT_LEVELS_QUOTE_DICT = {1: [1, 0, 0, 0, 0],
@@ -68,7 +67,6 @@ class MarketMakerAgent(TradingAgent):
                 mid = int((ask + bid) / 2)
                 spread = int(abs(ask - bid)/2)
             else:
-                log_print(f"SPREAD MISSING at time {currentTime}")
                 spread = self.last_spread
 
             # Place new quotes before canceling old ones to avoid empty book

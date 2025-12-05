@@ -1,6 +1,5 @@
 from agent.ZeroIntelligenceAgent import ZeroIntelligenceAgent
 from Message import Message
-from util import log_print
 
 from math import sqrt
 import numpy as np
@@ -51,7 +50,6 @@ class HeuristicBeliefLearningAgent(ZeroIntelligenceAgent):
 
         if len(self.stream_history[self.symbol]) < self.L:
             # Not enough history for HBL.
-            log_print("Insufficient history for HBL: length {}, L {}", len(self.stream_history[self.symbol]), self.L)
             super().placeOrder()
             return
 
@@ -135,21 +133,17 @@ class HeuristicBeliefLearningAgent(ZeroIntelligenceAgent):
 
         # If the best expected surplus is positive, go for it.
         if best_Es > 0:
-            log_print("Numpy: {} selects limit price {} with expected surplus {} (Pr = {:0.4f})", self.name, best_p,
-                      int(round(best_Es)), best_Pr)
 
             # Place the constructed order.
             self.placeLimitOrder(self.symbol, 100, buy, int(round(best_p)))
         else:
             # Do nothing if best limit price has negative expected surplus with below code.
-            log_print("Numpy: {} elects not to place an order (best expected surplus <= 0)", self.name)
+            pass
 
             # OTHER OPTION 1: Allow negative expected surplus with below code.
-            # log_print ("Numpy: {} placing undesirable order (best expected surplus <= 0)", self.name)
             # self.placeLimitOrder(self.symbol, 1, buy, int(round(best_p)))
 
             # OTHER OPTION 2: Force fallback to ZI logic on negative surplus with below code (including return).
-            # log_print ("Numpy: no desirable order for {}, acting as ZI", self.name)
             # super().placeOrder()
 
     def receiveMessage(self, currentTime, msg):

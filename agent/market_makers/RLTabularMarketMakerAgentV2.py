@@ -1,7 +1,6 @@
 from agent.TradingAgent import TradingAgent
 import pandas as pd
 import numpy as np
-from util import log_print
 
 
 class RLTabularMarketMakerAgentV2(TradingAgent):
@@ -86,7 +85,6 @@ class RLTabularMarketMakerAgentV2(TradingAgent):
         if self.state == 'AWAITING_SPREAD' and msg.body['msg'] == 'QUERY_SPREAD':
             bid, _, ask, _ = self.getKnownBidAsk(self.symbol)
             if not (bid and ask):
-                log_print(f"{self.name}: missing spread at {currentTime}, skipping quote")
                 self.setWakeup(currentTime + self.getWakeFrequency())
                 return
 

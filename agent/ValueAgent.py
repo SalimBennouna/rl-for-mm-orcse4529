@@ -1,5 +1,4 @@
 from agent.TradingAgent import TradingAgent
-from util import log_print
 
 from math import sqrt
 import numpy as np
@@ -61,12 +60,11 @@ class ValueAgent(TradingAgent):
         # May request real fundamental value from oracle as part of final cleanup/stats.
 
         #marked to fundamental
-        rT = self.oracle.observePrice(self.symbol, self.currentTime, sigma_n=0, random_state=self.random_state)
+        rT = self.oracle.emit_view(self.symbol, self.currentTime, sigma_n=0, random_state=self.random_state)
 
         # final (real) fundamental value times shares held.
         surplus = rT * H
 
-        log_print("surplus after holdings: {}", surplus)
 
         # Add ending cash value and subtract starting cash value.
         surplus += self.holdings['CASH'] - self.starting_cash
@@ -74,9 +72,6 @@ class ValueAgent(TradingAgent):
 
         self.logEvent('FINAL_VALUATION', surplus, True)
 
-        log_print(
-            "{} final report.  Holdings {}, end cash {}, start cash {}, final fundamental {}, surplus {}",
-            self.name, H, self.holdings['CASH'], self.starting_cash, rT, surplus)
 
         #print("Final surplus", self.name, surplus)
 
@@ -94,7 +89,6 @@ class ValueAgent(TradingAgent):
                 self.trading = True
 
                 # Time to start trading!
-                log_print("{} is ready to start trading now.", self.name)
 
         # Steady state wakeup behavior starts here.
 
@@ -127,10 +121,9 @@ class ValueAgent(TradingAgent):
 
         # The agent obtains a new noisy observation of the current fundamental value
         # and uses this to update its internal estimates in a Bayesian manner.
-        obs_t = self.oracle.observePrice(self.symbol, self.currentTime, sigma_n=self.sigma_n,
+        obs_t = self.oracle.emit_view(self.symbol, self.currentTime, sigma_n=self.sigma_n,
                                          random_state=self.random_state)
 
-        log_print("{} observed {} at {}", self.name, obs_t, self.currentTime)
 
         # Update internal estimates of the current fundamental value and our error of same.
 
@@ -181,7 +174,6 @@ class ValueAgent(TradingAgent):
         # time as the previous wake time.
         self.prev_wake_time = self.currentTime
 
-        log_print("{} estimates r_T = {} as of {}", self.name, r_T, self.currentTime)
 
         return r_T
 

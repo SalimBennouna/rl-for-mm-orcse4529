@@ -1,5 +1,4 @@
 from agent.TradingAgent import TradingAgent
-from util import log_print
 
 from math import sqrt
 import numpy as np
@@ -9,13 +8,11 @@ import pandas as pd
 class NoiseAgent(TradingAgent):
 
     def __init__(self, id, name, type, symbol='IBM', starting_cash=100000,
-                 log_orders=False, log_to_file=True, random_state=None, wakeup_time = None ):
+                 log_orders=False, log_to_file=True, random_state=None):
 
         # Base class init.
         super().__init__(id, name, type, starting_cash=starting_cash, log_orders=log_orders,
                          log_to_file=log_to_file, random_state=random_state)
-
-        self.wakeup_time = wakeup_time,
 
         self.symbol = symbol  # symbol to trade
 
@@ -59,7 +56,6 @@ class NoiseAgent(TradingAgent):
         # final (real) fundamental value times shares held.
         surplus = rT * H
 
-        log_print("surplus after holdings: {}", surplus)
 
         # Add ending cash value and subtract starting cash value.
         surplus += self.holdings['CASH'] - self.starting_cash
@@ -67,9 +63,6 @@ class NoiseAgent(TradingAgent):
 
         self.logEvent('FINAL_VALUATION', surplus, True)
 
-        log_print(
-            "{} final report.  Holdings {}, end cash {}, start cash {}, final fundamental {}, surplus {}",
-            self.name, H, self.holdings['CASH'], self.starting_cash, rT, surplus)
 
         print("Final relative surplus", self.name, surplus)
 
@@ -87,7 +80,6 @@ class NoiseAgent(TradingAgent):
                 self.trading = True
 
                 # Time to start trading!
-                log_print("{} is ready to start trading now.", self.name)
 
         # Steady state wakeup behavior starts here.
 
@@ -96,9 +88,6 @@ class NoiseAgent(TradingAgent):
         if self.mkt_closed and (self.symbol in self.daily_close_price):
             # Market is closed and we already got the daily close price.
             return
-
-        if self.wakeup_time[0] >currentTime:
-            self.setWakeup(self.wakeup_time[0])
 
         if self.mkt_closed and (not self.symbol in self.daily_close_price):
             self.getCurrentSpread(self.symbol)
@@ -144,6 +133,7 @@ class NoiseAgent(TradingAgent):
                 # We now have the information needed to place a limit order with the eta
                 # strategic threshold parameter.
                 self.placeOrder()
+                self.setWakeup(currentTime + self.getWakeFrequency())
                 self.state = 'AWAITING_WAKEUP'
 
     # Internal state and logic specific to this agent subclass.
@@ -159,4 +149,4 @@ class NoiseAgent(TradingAgent):
         return True
 
     def getWakeFrequency(self):
-        return pd.Timedelta(self.random_state.randint(low=0, high=100), unit='ns')
+        return pd.Timedelta(seconds=10)

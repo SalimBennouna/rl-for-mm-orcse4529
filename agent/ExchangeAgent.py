@@ -7,7 +7,6 @@
 from agent.Agent import Agent
 from Message import Message
 from OrderBook import OrderBook
-from util import log_print
 
 import datetime as dt
 
@@ -17,6 +16,8 @@ warnings.simplefilter(action='ignore', category=UserWarning)
 
 import pandas as pd
 pd.set_option('display.max_rows', 500)
+from scipy.sparse import dok_matrix
+from tqdm import tqdm
 
 from copy import deepcopy
 
@@ -74,10 +75,9 @@ class ExchangeAgent(Agent):
     # Obtain opening prices (in integer cents).  These are not noisy right now.
     for symbol in self.order_books:
       try:
-        self.order_books[symbol].last_trade = self.oracle.getDailyOpenPrice(symbol, self.mkt_open)
-        log_print ("Opening price for {} is {}", symbol, self.order_books[symbol].last_trade)
+        self.order_books[symbol].last_trade = self.oracle.params['r_bar']
       except AttributeError as e:
-        log_print(str(e))
+        pass
 
 
   # The exchange agent overrides this to additionally log the full depth of its
@@ -93,7 +93,6 @@ class ExchangeAgent(Agent):
         if not dfFund.empty:
           dfFund.set_index('FundamentalTime', inplace=True)
           self.writeLog(dfFund, filename='fundamental_{}'.format(symbol))
-          log_print("Fundamental archival complete.")
     if self.book_freq is None: return
     else:
       # Iterate over the order books controlled by this exchange.
@@ -101,8 +100,8 @@ class ExchangeAgent(Agent):
         start_time = dt.datetime.now()
         self.logOrderBookSnapshots(symbol)
         end_time = dt.datetime.now()
-        print("Time taken to log the order book: {}".format(end_time - start_time))
-        print("Order book archival complete.")
+        print(f"[exchange] order book logging duration: {end_time - start_time}")
+        print("[exchange] order book archival complete")
 
   def receiveMessage(self, currentTime, msg):
     super().receiveMessage(currentTime, msg)
@@ -118,7 +117,6 @@ class ExchangeAgent(Agent):
       # Most messages after close will receive a 'MKT_CLOSED' message in response.  A few things
       # might still be processed, like requests for final trade prices or such.
       if msg.body['msg'] in ['LIMIT_ORDER', 'MARKET_ORDER', 'CANCEL_ORDER', 'MODIFY_ORDER']:
-        log_print("{} received {}: {}", self.name, msg.body['msg'], msg.body['order'])
         self.sendMessage(msg.body['sender'], Message({"msg": "MKT_CLOSED"}))
 
         # Don't do any further processing on these messages!
@@ -128,7 +126,6 @@ class ExchangeAgent(Agent):
         # final trade of the day as their "daily close" price for a symbol.
         pass
       else:
-        log_print("{} received {}, discarded: market is closed.", self.name, msg.body['msg'])
         self.sendMessage(msg.body['sender'], Message({"msg": "MKT_CLOSED"}))
 
         # Don't do any further processing on these messages!
@@ -142,19 +139,16 @@ class ExchangeAgent(Agent):
 
     # Handle all message types understood by this exchange.
     if msg.body['msg'] == "WHEN_MKT_OPEN":
-      log_print("{} received WHEN_MKT_OPEN request from agent {}", self.name, msg.body['sender'])
 
       self.sendMessage(msg.body['sender'], Message({"msg": "WHEN_MKT_OPEN", "data": self.mkt_open}))
     elif msg.body['msg'] == "WHEN_MKT_CLOSE":
-      log_print("{} received WHEN_MKT_CLOSE request from agent {}", self.name, msg.body['sender'])
 
       self.sendMessage(msg.body['sender'], Message({"msg": "WHEN_MKT_CLOSE", "data": self.mkt_close}))
     elif msg.body['msg'] == "QUERY_LAST_TRADE":
       symbol = msg.body['symbol']
       if symbol not in self.order_books:
-        log_print("Last trade request discarded.  Unknown symbol: {}", symbol)
+        return
       else:
-        log_print("{} received QUERY_LAST_TRADE ({}) request from agent {}", self.name, symbol, msg.body['sender'])
 
         # Return the single last executed trade price (currently not volume) for the requested symbol.
         # This will return the average share price if multiple executions resulted from a single order.
@@ -165,80 +159,66 @@ class ExchangeAgent(Agent):
       symbol = msg.body['symbol']
       depth = msg.body['depth']
       if symbol not in self.order_books:
-        log_print("Bid-ask spread request discarded.  Unknown symbol: {}", symbol)
+        return
       else:
-        log_print("{} received QUERY_SPREAD ({}:{}) request from agent {}", self.name, symbol, depth,
-                  msg.body['sender'])
 
         # Return the requested depth on both sides of the order book for the requested symbol.
         # Returns price levels and aggregated volume at each level (not individual orders).
         self.sendMessage(msg.body['sender'], Message({"msg": "QUERY_SPREAD", "symbol": symbol, "depth": depth,
-                                                      "bids": self.order_books[symbol].getInsideBids(depth),
-                                                      "asks": self.order_books[symbol].getInsideAsks(depth),
+                                                      "bids": self.order_books[symbol].snapshot_bids(depth),
+                                                      "asks": self.order_books[symbol].snapshot_asks(depth),
                                                       "data": self.order_books[symbol].last_trade,
                                                       "mkt_closed": True if currentTime > self.mkt_close else False,
                                                       "book": ''}))
-
-        # It is possible to also send the pretty-printed order book to the agent for logging, but forcing pretty-printing
-        # of a large order book is very slow, so we should only do it with good reason.  We don't currently
-        # have a configurable option for it.
-        # "book": self.order_books[symbol].prettyPrint(silent=True) }))
     elif msg.body['msg'] == "QUERY_ORDER_STREAM":
       symbol = msg.body['symbol']
       length = msg.body['length']
 
       if symbol not in self.order_books:
-        log_print("Order stream request discarded.  Unknown symbol: {}", symbol)
+        return
       else:
-        log_print("{} received QUERY_ORDER_STREAM ({}:{}) request from agent {}", self.name, symbol, length,
-                  msg.body['sender'])
 
-      # We return indices [1:length] inclusive because the agent will want "orders leading up to the last
-      # L trades", and the items under index 0 are more recent than the last trade.
-      self.sendMessage(msg.body['sender'], Message({"msg": "QUERY_ORDER_STREAM", "symbol": symbol, "length": length,
-                                                    "mkt_closed": True if currentTime > self.mkt_close else False,
-                                                    "orders": self.order_books[symbol].history[1:length + 1]
-                                                    }))
+        # We return indices [1:length] inclusive because the agent will want "orders leading up to the last
+        # L trades", and the items under index 0 are more recent than the last trade.
+        self.sendMessage(msg.body['sender'], Message({"msg": "QUERY_ORDER_STREAM", "symbol": symbol, "length": length,
+                                                      "mkt_closed": True if currentTime > self.mkt_close else False,
+                                                      "orders": self.order_books[symbol].history[1:length + 1]
+                                                      }))
     elif msg.body['msg'] == 'QUERY_TRANSACTED_VOLUME':
       symbol = msg.body['symbol']
       lookback_period = msg.body['lookback_period']
       if symbol not in self.order_books:
-        log_print("Order stream request discarded.  Unknown symbol: {}", symbol)
+        return
       else:
-        log_print("{} received QUERY_TRANSACTED_VOLUME ({}:{}) request from agent {}", self.name, symbol, lookback_period,
-                  msg.body['sender'])
-      self.sendMessage(msg.body['sender'], Message({"msg": "QUERY_TRANSACTED_VOLUME", "symbol": symbol,
-                                                    "transacted_volume": self.order_books[symbol].get_transacted_volume(lookback_period),
-                                                    "mkt_closed": True if currentTime > self.mkt_close else False
-                                                    }))
+        self.sendMessage(msg.body['sender'], Message({"msg": "QUERY_TRANSACTED_VOLUME", "symbol": symbol,
+                                                      "transacted_volume": self.order_books[symbol].rolling_volume_sum(lookback_period),
+                                                      "mkt_closed": True if currentTime > self.mkt_close else False
+                                                      }))
     elif msg.body['msg'] == "LIMIT_ORDER":
       order = msg.body['order']
-      log_print("{} received LIMIT_ORDER: {}", self.name, order)
       if order.symbol not in self.order_books:
-        log_print("Limit Order discarded.  Unknown symbol: {}", order.symbol)
+        return
       else:
         # Hand the order to the order book for processing.
-        self.order_books[order.symbol].handleLimitOrder(deepcopy(order))
+        self.order_books[order.symbol].process_limit_submit(deepcopy(order))
     elif msg.body['msg'] == "MARKET_ORDER":
       order = msg.body['order']
-      log_print("{} received MARKET_ORDER: {}", self.name, order)
       if order.symbol not in self.order_books:
-        log_print("Market Order discarded.  Unknown symbol: {}", order.symbol)
+        return
       else:
         # Hand the market order to the order book for processing.
-        self.order_books[order.symbol].handleMarketOrder(deepcopy(order))
+        self.order_books[order.symbol].process_market_submit(deepcopy(order))
     elif msg.body['msg'] == "CANCEL_ORDER":
       # Note: this is somewhat open to abuse, as in theory agents could cancel other agents' orders.
       # An agent could also become confused if they receive a (partial) execution on an order they
       # then successfully cancel, but receive the cancel confirmation first.  Things to think about
       # for later...
       order = msg.body['order']
-      log_print("{} received CANCEL_ORDER: {}", self.name, order)
       if order.symbol not in self.order_books:
-        log_print("Cancellation request discarded.  Unknown symbol: {}", order.symbol)
+        return
       else:
         # Hand the order to the order book for processing.
-        self.order_books[order.symbol].cancelOrder(deepcopy(order))
+        self.order_books[order.symbol].void_limit_entry(deepcopy(order))
     elif msg.body['msg'] == 'MODIFY_ORDER':
       # Replace an existing order with a modified order.  There could be some timing issues
       # here.  What if an order is partially executed, but the submitting agent has not
@@ -248,17 +228,38 @@ class ExchangeAgent(Agent):
       # happens.
       order = msg.body['order']
       new_order = msg.body['new_order']
-      log_print("{} received MODIFY_ORDER: {}, new order: {}".format(self.name, order, new_order))
       if order.symbol not in self.order_books:
-        log_print("Modification request discarded.  Unknown symbol: {}".format(order.symbol))
+        return
       else:
-        self.order_books[order.symbol].modifyOrder(deepcopy(order), deepcopy(new_order))
+        self.order_books[order.symbol].adjust_limit_entry(deepcopy(order), deepcopy(new_order))
 
   def logOrderBookSnapshots(self, symbol):
     """
     Log full depth quotes (price, volume) from this order book at some pre-determined frequency. Here we are looking at
     the actual log for this order book (i.e. are there snapshots to export, independent of the requested frequency).
     """
+    def book_log_to_df(book):
+      """Build a sparse DataFrame of quote snapshots from an order book log."""
+      quotes = sorted(list(book.quotes_seen))
+      log_len = len(book.book_log)
+      quote_idx_dict = {quote: idx for idx, quote in enumerate(quotes)}
+      quotes_times = []
+
+      # Construct sparse matrix, where rows are timesteps, columns are quotes and elements are volume.
+      S = dok_matrix((log_len, len(quotes)), dtype=int)  # Dictionary Of Keys based sparse matrix.
+
+      for i, row in enumerate(tqdm(book.book_log, desc="Processing orderbook log")):
+        quotes_times.append(row['QuoteTime'])
+        for quote, vol in row.items():
+          if quote == "QuoteTime":
+            continue
+          S[i, quote_idx_dict[quote]] = vol
+
+      S = S.tocsc()  # Convert this matrix to Compressed Sparse Column format for pandas to consume.
+      df = pd.DataFrame.sparse.from_spmatrix(S, columns=quotes)
+      df.insert(0, 'QuoteTime', quotes_times, allow_duplicates=True)
+      return df
+
     def get_quote_range_iterator(s):
       """ Helper method for order book logging. Takes pandas Series and returns python range() from first to last
           element.
@@ -275,8 +276,8 @@ class ExchangeAgent(Agent):
 
     if book.book_log:
 
-      print("Logging order book to file...")
-      dfLog = book.book_log_to_df()
+      print(f"[exchange] archiving order book for {symbol} ...")
+      dfLog = book_log_to_df(book)
       dfLog.set_index('QuoteTime', inplace=True)
       dfLog = dfLog[~dfLog.index.duplicated(keep='last')]
       dfLog.sort_index(inplace=True)
@@ -334,7 +335,7 @@ class ExchangeAgent(Agent):
       # Archive the order book snapshots directly to a file named with the symbol, rather than
       # to the exchange agent log.
       self.writeLog(df, filename=filename)
-      print("Order book logging complete!")
+      print(f"[exchange] archive finished for {symbol}")
 
   def sendMessage (self, recipientID, msg):
     # The ExchangeAgent automatically applies appropriate parallel processing pipeline delay
@@ -345,11 +346,11 @@ class ExchangeAgent(Agent):
     if msg.body['msg'] in ['ORDER_ACCEPTED', 'ORDER_CANCELLED', 'ORDER_EXECUTED']:
       # Messages that require order book modification (not simple queries) incur the additional
       # parallel processing delay as configured.
-      super().sendMessage(recipientID, msg, delay = self.pipeline_delay)
+      self.kernel.dispatch(self.id, recipientID, msg, delay=self.pipeline_delay)
       if self.log_orders: self.logEvent(msg.body['msg'], msg.body['order'].to_dict())
     else:
       # Other message types incur only the currently-configured computation delay for this agent.
-      super().sendMessage(recipientID, msg)
+      self.kernel.dispatch(self.id, recipientID, msg)
 
   # Simple accessor methods for the market open and close times.
   def getMarketOpen(self):

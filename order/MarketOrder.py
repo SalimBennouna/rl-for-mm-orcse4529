@@ -1,11 +1,9 @@
 from order.Order import Order
-from Kernel import Kernel
+from SimulationCore import SimulationCore
 from agent.Agent import dollarize
 from copy import deepcopy
 
 import sys
-
-silent_mode = False
 
 
 class MarketOrder(Order):
@@ -14,14 +12,11 @@ class MarketOrder(Order):
         super().__init__(agent_id, time_placed, symbol, quantity, is_buy_order, order_id=order_id, tag=tag)
 
     def __str__(self):
-        if silent_mode: return ''
-
         return "(Agent {} @ {}) : MKT Order {} {} {}".format(self.agent_id, self.time_placed,
                                                              "BUY" if self.is_buy_order else "SELL",
                                                              self.quantity, self.symbol)
 
     def __repr__(self):
-        if silent_mode: return ''
         return self.__str__()
 
     def __copy__(self):

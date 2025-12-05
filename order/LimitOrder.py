@@ -2,14 +2,11 @@
 # Orders that typically go in an Exchange's OrderBook.
 
 from order.Order import Order
-from Kernel import Kernel
+from SimulationCore import SimulationCore
 from agent.Agent import dollarize
 from copy import deepcopy
 
 import sys
-
-# Module level variable that can be changed by config files.
-silent_mode = False
 
 
 class LimitOrder(Order):
@@ -23,8 +20,6 @@ class LimitOrder(Order):
         self.limit_price: int = limit_price
 
     def __str__(self):
-        if silent_mode: return ''
-
         filled = ''
         if self.fill_price: filled = " (filled @ {})".format(dollarize(self.fill_price))
 
@@ -39,7 +34,6 @@ class LimitOrder(Order):
                                                                 self.limit_price) < sys.maxsize else 'MKT', filled)
 
     def __repr__(self):
-        if silent_mode: return ''
         return self.__str__()
 
     def __copy__(self):

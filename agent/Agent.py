@@ -3,7 +3,6 @@ import sys
 import traceback
 
 from copy import deepcopy
-from util import log_print
 
 class Agent:
 
@@ -61,7 +60,6 @@ class Agent:
 
     self.kernel = kernel
 
-    log_print ("{} exists!", self.name)
 
 
   def kernelStarting (self, startTime):
@@ -73,8 +71,6 @@ class Agent:
     # Base Agent schedules a wakeup call for the first available timestamp.
     # Subclass agents may override this behavior as needed.
 
-    log_print ("Agent {} ({}) requesting kernel wakeup at time {}",
-           self.id, self.name, startTime)
 
     self.setWakeup(startTime)
 
@@ -132,8 +128,6 @@ class Agent:
 
     self.currentTime = currentTime
 
-    log_print ("At {}, agent {} ({}) received: {}",
-                  currentTime, self.id, self.name, msg)
 
 
   def wakeup (self, currentTime):
@@ -143,8 +137,6 @@ class Agent:
 
     self.currentTime = currentTime
 
-    log_print ("At {}, agent {} ({}) received wakeup.",
-                  currentTime, self.id, self.name)
 
 
   ### Methods used to request services from the Kernel.  These should be used
@@ -154,21 +146,15 @@ class Agent:
   ### It is possible this could change in the future.  Normal agents will
   ### not typically wish to request additional delay.
   def sendMessage (self, recipientID, msg, delay = 0):
-    self.kernel.sendMessage(self.id, recipientID, msg, delay = delay)
+    self.kernel.dispatch(self.id, recipientID, msg, delay = delay)
 
   def setWakeup (self, requestedTime):
-    self.kernel.setWakeup(self.id, requestedTime)
+    self.kernel.schedule_wake(self.id, requestedTime)
 
   def writeLog (self, dfLog, filename=None):
-    self.kernel.writeLog(self.id, dfLog, filename)
+    self.kernel.archive_df(self.id, dfLog, filename)
 
   def updateAgentState (self, state):
-    """ Agents should use this method to replace their custom state in the dictionary
-        the Kernel will return to the experimental config file at the end of the
-        simulation.  This is intended to be write-only, and agents should not use
-        it to store information for their own later use.
-    """
-
     self.kernel.updateAgentState(self.id, state)
 
 

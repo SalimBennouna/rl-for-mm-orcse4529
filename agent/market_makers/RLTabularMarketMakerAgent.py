@@ -1,7 +1,6 @@
 from agent.TradingAgent import TradingAgent
 import pandas as pd
 import numpy as np
-from util import log_print
 
 
 class RLTabularMarketMakerAgent(TradingAgent):
@@ -90,7 +89,6 @@ class RLTabularMarketMakerAgent(TradingAgent):
                 # Use last trade + last spread to seed the book instead of sitting out.
                 mid = self.last_trade.get(self.symbol)
                 if mid is None:
-                    log_print(f"{self.name}: missing spread and no last trade at {currentTime}, skipping quote")
                     self.setWakeup(currentTime + self.getWakeFrequency())
                     return
                 spread = self.last_spread

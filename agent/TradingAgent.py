@@ -3,7 +3,6 @@ from agent.ExchangeAgent import ExchangeAgent
 from Message import Message
 from order.LimitOrder import LimitOrder
 from order.MarketOrder import MarketOrder
-from util import log_print
 
 from copy import deepcopy
 import sys
@@ -105,12 +104,12 @@ class TradingAgent(Agent):
     # self.kernel is set in Agent.kernelInitializing()
     self.logEvent('STARTING_CASH', self.starting_cash, True)
 
-    # Find an exchange with which we can place orders.  It is guaranteed
-    # to exist by now (if there is one).
-    self.exchangeID = self.kernel.findAgentByType(ExchangeAgent)
+    self.exchangeID = None
+    for ag in self.kernel.agents:
+      if isinstance(ag, ExchangeAgent):
+        self.exchangeID = ag.id
+        break
 
-    log_print ("Agent {} requested agent of type Agent.ExchangeAgent.  Given Agent ID: {}",
-               self.id, self.exchangeID)
 
     # Request a wake-up call as in the base Agent.
     super().kernelStarting(startTime)
@@ -174,12 +173,10 @@ class TradingAgent(Agent):
     if msg.body['msg'] == "WHEN_MKT_OPEN":
       self.mkt_open = msg.body['data']
 
-      log_print ("Recorded market open: {}", self.mkt_open)
 
     elif msg.body['msg'] == "WHEN_MKT_CLOSE":
       self.mkt_close = msg.body['data']
 
-      log_print ("Recorded market close: {}", self.mkt_close)
 
     elif msg.body['msg'] == "ORDER_EXECUTED":
       # Call the orderExecuted method, which subclasses should extend.  This parent
@@ -293,7 +290,6 @@ class TradingAgent(Agent):
         new_at_risk = self.markToMarket(new_holdings) - new_holdings['CASH']
 
         if (new_at_risk > at_risk) and (new_at_risk > self.starting_cash):
-          log_print ("TradingAgent ignored limit order due to at-risk constraints: {}\n{}", order, self.fmtHoldings(self.holdings))
           return
 
       # Copy the intended order for logging, so any changes made to it elsewhere
@@ -309,8 +305,7 @@ class TradingAgent(Agent):
       if self.log_orders: self.logEvent('ORDER_SUBMITTED', order.to_dict())
 
     else:
-      log_print ("TradingAgent ignored limit order of quantity zero: {}", order)
-
+      return
   def placeMarketOrder(self, symbol, quantity, is_buy_order, order_id=None, ignore_risk = True, tag=None):
     """
       Used by any Trading Agent subclass to place a market order. The market order is created as multiple limit orders
@@ -336,15 +331,12 @@ class TradingAgent(Agent):
         new_at_risk = self.markToMarket(new_holdings) - new_holdings['CASH']
 
         if (new_at_risk > at_risk) and (new_at_risk > self.starting_cash):
-          log_print("TradingAgent ignored market order due to at-risk constraints: {}\n{}",
-                    order, self.fmtHoldings(self.holdings))
           return
       self.orders[order.order_id] = deepcopy(order)
       self.sendMessage(self.exchangeID, Message({"msg" : "MARKET_ORDER", "sender": self.id, "order": order}))
       if self.log_orders: self.logEvent('ORDER_SUBMITTED', order.to_dict())
     else:
-      log_print("TradingAgent ignored market order of quantity zero: {}", order)
-
+      return
   def cancelOrder(self, order):
     """Used by any Trading Agent subclass to cancel any order.  The order must currently
     appear in the agent's open orders list."""
@@ -354,8 +346,7 @@ class TradingAgent(Agent):
       # Log this activity.
       if self.log_orders: self.logEvent('CANCEL_SUBMITTED', order.to_dict())
     else:
-      log_print("order {} of type, {} cannot be cancelled", order, type(order))
-
+      return
   def modifyOrder (self, order, newOrder):
     """ Used by any Trading Agent subclass to modify any existing limit order.  The order must currently
         appear in the agent's open orders list.  Some additional tests might be useful here
@@ -370,7 +361,6 @@ class TradingAgent(Agent):
   # Handles ORDER_EXECUTED messages from an exchange agent.  Subclasses may wish to extend,
   # but should still call parent method for basic portfolio/returns tracking.
   def orderExecuted (self, order):
-    log_print ("Received notification of execution for: {}", order)
 
     # Log this activity.
     if self.log_orders: self.logEvent('ORDER_EXECUTED', order.to_dict())
@@ -400,9 +390,7 @@ class TradingAgent(Agent):
       else: o.quantity -= order.quantity
 
     else:
-      log_print ("Execution received for order not in orders list: {}", order)
-
-    log_print ("After execution, agent open orders: {}", self.orders)
+      return
 
     # After execution, log holdings.
     self.logEvent('HOLDINGS_UPDATED', self.holdings)
@@ -410,7 +398,6 @@ class TradingAgent(Agent):
 
   # Handles ORDER_ACCEPTED messages from an exchange agent.  Subclasses may wish to extend.
   def orderAccepted (self, order):
-    log_print ("Received notification of acceptance for: {}", order)
 
     # Log this activity.
     if self.log_orders: self.logEvent('ORDER_ACCEPTED', order.to_dict())
@@ -422,7 +409,6 @@ class TradingAgent(Agent):
 
   # Handles ORDER_CANCELLED messages from an exchange agent.  Subclasses may wish to extend.
   def orderCancelled (self, order):
-    log_print ("Received notification of cancellation for: {}", order)
 
     # Log this activity.
     if self.log_orders: self.logEvent('ORDER_CANCELLED', order.to_dict())
@@ -433,12 +419,10 @@ class TradingAgent(Agent):
     if order.order_id in self.orders:
       del self.orders[order.order_id]
     else:
-      log_print ("Cancellation received for order not in orders list: {}", order)
-
+      return
 
   # Handles MKT_CLOSED messages from an exchange agent.  Subclasses may wish to extend.
   def marketClosed (self):
-    log_print ("Received notification of market closure.")
 
     # Log this activity.
     self.logEvent('MKT_CLOSED')
@@ -451,13 +435,11 @@ class TradingAgent(Agent):
   def queryLastTrade (self, symbol, price):
     self.last_trade[symbol] = price
 
-    log_print ("Received last trade price of {} for {}.", self.last_trade[symbol], symbol)
 
     if self.mkt_closed:
       # Note this as the final price of the day.
       self.daily_close_price[symbol] = self.last_trade[symbol]
 
-      log_print ("Received daily close price of {} for {}.", self.last_trade[symbol], symbol)
 
 
   # Handles QUERY_SPREAD messages from an exchange agent.
@@ -474,7 +456,6 @@ class TradingAgent(Agent):
     if asks: best_ask, best_ask_qty = (asks[0][0], asks[0][1])
     else: best_ask, best_ask_qty = ('No asks', 0)
 
-    log_print ("Received spread of {} @ {} / {} @ {} for {}", best_bid_qty, best_bid, best_ask_qty, best_ask, symbol)
 
     self.logEvent("BID_DEPTH", bids)
     self.logEvent("ASK_DEPTH", asks)
@@ -524,9 +505,6 @@ class TradingAgent(Agent):
     bid_liq = self.getBookLiquidity(self.known_bids[symbol], within)
     ask_liq = self.getBookLiquidity(self.known_asks[symbol], within)
 
-    log_print ("Bid/ask liq: {}, {}", bid_liq, ask_liq)
-    log_print ("Known bids: {}", self.known_bids[self.symbol])
-    log_print ("Known asks: {}", self.known_asks[self.symbol])
 
     return bid_liq, ask_liq
 
@@ -540,7 +518,6 @@ class TradingAgent(Agent):
 
       # Is this price within "within" proportion of the best price?
       if abs(best - price) <= int(round(best * within)):
-        log_print ("Within {} of {}: {} with {} shares", within, best, price, shares)
         liq += shares
 
     return liq
